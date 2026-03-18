@@ -1,0 +1,53 @@
+[
+  {
+    "id": "fireball",
+    "name": "Fireball",
+    "type": "ACTIVE",
+    "chargeCost": 50,
+    "baseDamage": 100,
+    "damageType": "ENERGY",
+    "accuracy": 90,
+    "includeMoveDamage": false,
+    "description": "Deals 100 + [Power] energy damage immediately.",
+    "actions": [
+      { "action": "DAMAGE_TARGET", "amount": 100, "useStats": true }
+    ],
+    "icon": "icon_fireball"
+  },
+  {
+    "id": "arcane_focus",
+    "name": "Arcane Focus",
+    "type": "STACK",
+    "chargeCost": 25,
+    "baseDamage": 0,
+    "damageType": "ENERGY",
+    "accuracy": 100,
+    "includeMoveDamage": true,
+    "description": "Next 2 Pentagon matches deal bonus energy damage based on Power.",
+    "actions": [
+      { "action": "ADD_STACK", "trigger": "match_pentagon", "effect": "bonus_damage", "charges": 2, "icon": "icon_arcane_focus", "skillId": "arcane_focus" }
+    ],
+    "icon": "icon_arcane_focus"
+  },
+  {
+    "id": "ice_lance",
+    "name": "Ice Lance",
+    "type": "STACK",
+    "chargeCost": 15,
+    "description": "Next match freezes the opponent for 1 turn.",
+    "actions": [
+      { "action": "ADD_STACK", "trigger": "match_any", "effect": "freeze_opponent", "charges": 1, "icon": "icon_ice_lance", "skillId": "ice_lance" }
+    ],
+    "icon": "icon_ice_lance"
+  },
+  {
+    "id": "mana_shield",
+    "name": "Mana Shield",
+    "type": "PASSIVE",
+    "chargeCost": 0,
+    "description": "Start combat with 20 Charge.",
+    "actions": [
+      { "action": "ON_COMBAT_START", "effect": "add_charge", "amount": 20 }
+    ]
+  }
+]

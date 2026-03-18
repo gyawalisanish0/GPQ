@@ -1,0 +1,7 @@
+{
+  "id": "triangle",
+  "name": "Triangle Gem",
+  "type": "normal",
+  "shape": "TRIANGLE",
+  "color": "0x3b82f6"
+}

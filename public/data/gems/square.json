@@ -1,0 +1,7 @@
+{
+  "id": "square",
+  "name": "Square Gem",
+  "type": "normal",
+  "shape": "SQUARE",
+  "color": "0x22c55e"
+}

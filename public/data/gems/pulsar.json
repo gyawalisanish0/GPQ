@@ -1,0 +1,11 @@
+{
+  "id": "pulsar",
+  "name": "Pulsar Gem",
+  "type": "special",
+  "specialType": "PULSAR",
+  "description": "Clears a row and column",
+  "actions": [
+    { "action": "PLAY_VFX", "id": "pulsar_beam", "isCross": false, "width": 1 },
+    { "action": "DAMAGE_LINE", "isCross": false, "width": 1 }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "id": "mage",
+  "name": "Mage",
+  "classType": "CASTER",
+  "damageType": "ENERGY",
+  "maxHp": 300,
+  "initialHp": 300,
+  "maxCharge": 150,
+  "initialCharge": 50,
+  "stats": {
+    "strength": 10,
+    "endurance": 15,
+    "power": 45,
+    "resistance": 35,
+    "speed": 25,
+    "accuracy": 95
+  },
+  "portrait": "portrait_mage",
+  "unlockedSkills": ["fireball", "arcane_focus", "mana_shield", "ice_lance"],
+  "loadout": {
+    "passive": "mana_shield",
+    "active": "fireball",
+    "stacks": ["arcane_focus", "ice_lance"]
+  }
+}

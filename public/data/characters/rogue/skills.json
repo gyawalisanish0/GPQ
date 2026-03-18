@@ -1,0 +1,42 @@
+[
+  {
+    "id": "backstab",
+    "name": "Backstab",
+    "type": "ACTIVE",
+    "chargeCost": 25,
+    "baseDamage": 60,
+    "damageType": "PHYSICAL",
+    "accuracy": 100,
+    "includeMoveDamage": false,
+    "description": "Deals 60 + [Strength] physical damage.",
+    "actions": [
+      { "action": "DAMAGE_TARGET", "amount": 60, "useStats": true }
+    ],
+    "icon": "icon_backstab"
+  },
+  {
+    "id": "poison_blade",
+    "name": "Poison Blade",
+    "type": "STACK",
+    "chargeCost": 20,
+    "baseDamage": 0,
+    "damageType": "PHYSICAL",
+    "accuracy": 100,
+    "includeMoveDamage": true,
+    "description": "Next 2 matches apply poison.",
+    "actions": [
+      { "action": "ADD_STACK", "trigger": "match_any", "effect": "poison", "charges": 2, "icon": "icon_poison", "skillId": "poison_blade" }
+    ],
+    "icon": "icon_poison"
+  },
+  {
+    "id": "evasion",
+    "name": "Evasion",
+    "type": "PASSIVE",
+    "chargeCost": 0,
+    "description": "Increases dodge chance by 10%.",
+    "actions": [
+      { "action": "REGISTER_HOOK", "hook": "ON_ATTACKED", "effect": "dodge", "chance": 10 }
+    ]
+  }
+]

@@ -1,0 +1,25 @@
+{
+  "id": "rogue",
+  "name": "Rogue",
+  "classType": "RANGER",
+  "damageType": "PHYSICAL",
+  "maxHp": 350,
+  "initialHp": 350,
+  "maxCharge": 100,
+  "initialCharge": 0,
+  "stats": {
+    "strength": 30,
+    "endurance": 20,
+    "power": 15,
+    "resistance": 10,
+    "speed": 50,
+    "accuracy": 95
+  },
+  "portrait": "portrait_rogue",
+  "unlockedSkills": ["backstab", "poison_blade", "evasion"],
+  "loadout": {
+    "passive": "evasion",
+    "active": "backstab",
+    "stacks": ["poison_blade"]
+  }
+}

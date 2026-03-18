@@ -1,0 +1,11 @@
+{
+  "id": "bomb",
+  "name": "Bomb Gem",
+  "type": "special",
+  "specialType": "BOMB",
+  "description": "Explodes in a radius",
+  "actions": [
+    { "action": "PLAY_VFX", "id": "explosion", "radius": 2 },
+    { "action": "DAMAGE_AREA", "radius": 2 }
+  ]
+}

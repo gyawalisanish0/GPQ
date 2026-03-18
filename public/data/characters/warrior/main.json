@@ -1,0 +1,25 @@
+{
+  "id": "warrior",
+  "name": "Warrior",
+  "classType": "WARRIOR",
+  "damageType": "PHYSICAL",
+  "maxHp": 500,
+  "initialHp": 500,
+  "maxCharge": 100,
+  "initialCharge": 0,
+  "stats": {
+    "strength": 40,
+    "endurance": 35,
+    "power": 10,
+    "resistance": 15,
+    "speed": 20,
+    "accuracy": 90
+  },
+  "portrait": "portrait_warrior",
+  "unlockedSkills": ["slash", "fury", "resilience"],
+  "loadout": {
+    "passive": "resilience",
+    "active": "slash",
+    "stacks": ["fury"]
+  }
+}

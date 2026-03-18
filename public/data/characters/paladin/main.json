@@ -1,0 +1,25 @@
+{
+  "id": "paladin",
+  "name": "Paladin",
+  "classType": "GUARDIAN",
+  "damageType": "PHYSICAL",
+  "maxHp": 600,
+  "initialHp": 600,
+  "maxCharge": 100,
+  "initialCharge": 0,
+  "stats": {
+    "strength": 35,
+    "endurance": 50,
+    "power": 20,
+    "resistance": 40,
+    "speed": 10,
+    "accuracy": 85
+  },
+  "portrait": "portrait_paladin",
+  "unlockedSkills": ["smite", "holy_shield", "divine_aura"],
+  "loadout": {
+    "passive": "divine_aura",
+    "active": "smite",
+    "stacks": ["holy_shield"]
+  }
+}

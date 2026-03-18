@@ -1,0 +1,12 @@
+{
+  "id": "missile",
+  "name": "Missile Gem",
+  "type": "special",
+  "specialType": "MISSILE",
+  "description": "Destroys a random gem",
+  "actions": [
+    { "action": "SPAWN_PROJECTILES", "count": 3, "impactActions": [
+      { "action": "DAMAGE_AREA", "radius": 0 }
+    ]}
+  ]
+}

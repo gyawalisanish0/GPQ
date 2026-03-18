@@ -1,0 +1,12 @@
+{
+  "player": {
+    "speed": 250,
+    "acceleration": 1200,
+    "drag": 800,
+    "maxHealth": 100
+  },
+  "world": {
+    "gravity": 0,
+    "debug": false
+  }
+}

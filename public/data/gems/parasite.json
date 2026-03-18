@@ -1,0 +1,12 @@
+{
+  "id": "parasite",
+  "name": "Parasite Gem",
+  "type": "special",
+  "specialType": "PARASITE",
+  "description": "Transforms all gems of a color",
+  "actions": [
+    { "action": "TARGET_SHAPE", "shape": "random", "impactActions": [
+      { "action": "DAMAGE_AREA", "radius": 0 }
+    ]}
+  ]
+}

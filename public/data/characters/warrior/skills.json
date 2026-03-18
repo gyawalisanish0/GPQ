@@ -1,0 +1,42 @@
+[
+  {
+    "id": "slash",
+    "name": "Heavy Slash",
+    "type": "ACTIVE",
+    "chargeCost": 20,
+    "baseDamage": 50,
+    "damageType": "PHYSICAL",
+    "accuracy": 95,
+    "includeMoveDamage": false,
+    "description": "Deals 50 + [Strength] physical damage immediately.",
+    "actions": [
+      { "action": "DAMAGE_TARGET", "amount": 50, "useStats": true }
+    ],
+    "icon": "icon_slash"
+  },
+  {
+    "id": "fury",
+    "name": "Battle Fury",
+    "type": "STACK",
+    "chargeCost": 30,
+    "baseDamage": 0,
+    "damageType": "PHYSICAL",
+    "accuracy": 100,
+    "includeMoveDamage": true,
+    "description": "Next 3 Star matches deal bonus physical damage based on Strength.",
+    "actions": [
+      { "action": "ADD_STACK", "trigger": "match_star", "effect": "bonus_damage", "charges": 3, "icon": "icon_fury", "skillId": "fury" }
+    ],
+    "icon": "icon_fury"
+  },
+  {
+    "id": "resilience",
+    "name": "Resilience",
+    "type": "PASSIVE",
+    "chargeCost": 0,
+    "description": "Heal 10 HP when dropping below 30% HP.",
+    "actions": [
+      { "action": "REGISTER_HOOK", "hook": "ON_HP_BELOW_30", "effect": "heal", "amount": 10 }
+    ]
+  }
+]

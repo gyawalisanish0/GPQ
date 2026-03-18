@@ -1,0 +1,42 @@
+[
+  {
+    "id": "smite",
+    "name": "Smite",
+    "type": "ACTIVE",
+    "chargeCost": 40,
+    "baseDamage": 80,
+    "damageType": "ENERGY",
+    "accuracy": 90,
+    "includeMoveDamage": false,
+    "description": "Deals 80 + [Power] energy damage.",
+    "actions": [
+      { "action": "DAMAGE_TARGET", "amount": 80, "useStats": true }
+    ],
+    "icon": "icon_smite"
+  },
+  {
+    "id": "holy_shield",
+    "name": "Holy Shield",
+    "type": "STACK",
+    "chargeCost": 30,
+    "baseDamage": 0,
+    "damageType": "ENERGY",
+    "accuracy": 100,
+    "includeMoveDamage": true,
+    "description": "Next 3 matches grant a shield.",
+    "actions": [
+      { "action": "ADD_STACK", "trigger": "match_any", "effect": "shield", "charges": 3, "icon": "icon_shield", "skillId": "holy_shield" }
+    ],
+    "icon": "icon_shield"
+  },
+  {
+    "id": "divine_aura",
+    "name": "Divine Aura",
+    "type": "PASSIVE",
+    "chargeCost": 0,
+    "description": "Heal 5 HP every turn.",
+    "actions": [
+      { "action": "REGISTER_HOOK", "hook": "ON_TURN_START", "effect": "heal", "amount": 5 }
+    ]
+  }
+]
