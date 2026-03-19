@@ -7,7 +7,10 @@ export enum CharacterClass {
     GUARDIAN = 'GUARDIAN',
     RANGER = 'RANGER',
     HUNTER = 'HUNTER',
-    CASTER = 'CASTER'
+    CASTER = 'CASTER',
+    // FIX: DUMMY was used in character data but missing from enum,
+    // causing ClassGemMap lookup to return undefined and crash the constructor.
+    DUMMY = 'DUMMY'
 }
 
 export interface CharacterStats {
@@ -24,7 +27,11 @@ export const ClassGemMap: Record<CharacterClass, ShapeType> = {
     [CharacterClass.GUARDIAN]: ShapeType.HEXAGON,
     [CharacterClass.RANGER]: ShapeType.TRIANGLE,
     [CharacterClass.HUNTER]: ShapeType.SQUARE,
-    [CharacterClass.CASTER]: ShapeType.PENTAGON
+    [CharacterClass.CASTER]: ShapeType.PENTAGON,
+    // FIX: DUMMY characters use SQUARE as their linked gem (arbitrary default).
+    // Without this entry, ClassGemMap[DUMMY] is undefined, linkedGem is undefined,
+    // and the constructor throws "Invalid CharacterClass: DUMMY".
+    [CharacterClass.DUMMY]: ShapeType.SQUARE
 };
 
 export interface CharacterLoadout {
@@ -76,9 +83,12 @@ export class Character {
             this.portrait = data.portrait || '';
             this.unlockedSkills = data.unlockedSkills || [];
             this.loadout = data.loadout || { passive: null, active: null, stacks: [] };
+            this.damageType = data.damageType || DamageType.PHYSICAL;
+
+            // FIX: ClassGemMap is now exhaustive over CharacterClass so this
+            // lookup is always defined. The error is thrown only for truly unknown
+            // classType values that arrive from malformed JSON at runtime.
             this.linkedGem = ClassGemMap[this.classType];
-            this.damageType = data.damageType || DamageType.PHYSICAL; // Default to PHYSICAL
-            
             if (!this.linkedGem) {
                 throw new Error(`Invalid CharacterClass: ${this.classType}`);
             }

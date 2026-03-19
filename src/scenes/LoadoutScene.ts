@@ -26,6 +26,18 @@ export class LoadoutScene extends BaseScene {
     private currentScrollY: number = 0;
     private maxScroll: number = 0;
 
+    // FIX: Store the initial Y offset of scrollContainer so update() can apply
+    // scrolling on top of it. Without this, removing scrollViewport would collapse
+    // all content to y=0 inside rightPane.
+    private scrollBaseY: number = 0;
+
+    // FIX: Drag scroll state — wheel-only scroll breaks on touch devices.
+    private isDraggingScroll: boolean = false;
+    private dragLastY: number = 0;
+    // Bounds of the scrollable area in screen space so drag only activates inside it.
+    private scrollAreaLeft: number = 0;
+    private scrollAreaTop: number = 0;
+
     constructor() {
         super('LoadoutScene');
     }
@@ -54,21 +66,67 @@ export class LoadoutScene extends BaseScene {
     create() {
         this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
             this.input.off('wheel');
+            this.input.off('pointerdown');
+            this.input.off('pointermove');
+            this.input.off('pointerup');
         });
 
-        this.input.on('wheel', (pointer: Phaser.Input.Pointer, gameObjects: any, deltaX: number, deltaY: number) => {
-            this.targetScrollY -= deltaY * 0.8;
-            this.targetScrollY = Phaser.Math.Clamp(this.targetScrollY, -this.maxScroll, 0);
+        // FIX: Normalise wheel deltaY across the three deltaMode values browsers can report:
+        //   DOM_DELTA_PIXEL = 0  → raw pixels, use as-is with a small multiplier
+        //   DOM_DELTA_LINE  = 1  → line units (~20px each), multiply by 20
+        //   DOM_DELTA_PAGE  = 2  → page units (~600px each), multiply by 600
+        // The original code used a flat 0.8 multiplier which made line-mode scroll
+        // imperceptibly slow and page-mode scroll impossibly fast.
+        this.input.on('wheel',
+            (pointer: Phaser.Input.Pointer, _gameObjects: any, _deltaX: number, deltaY: number) => {
+                const nativeEvent = pointer.event as WheelEvent;
+                let normalised = deltaY;
+                if (nativeEvent && nativeEvent.deltaMode !== undefined) {
+                    if (nativeEvent.deltaMode === 1) normalised = deltaY * 20;   // DOM_DELTA_LINE
+                    else if (nativeEvent.deltaMode === 2) normalised = deltaY * 600; // DOM_DELTA_PAGE
+                }
+                this.targetScrollY -= normalised * 0.8;
+                this.targetScrollY = Phaser.Math.Clamp(this.targetScrollY, -this.maxScroll, 0);
+            }
+        );
+
+        // FIX: Add drag/touch scrolling. The scene's pointerdown fires before any
+        // child interactive objects consume the event, so we track start Y here and
+        // apply delta in pointermove. We only activate drag when the pointer is
+        // inside the right-pane scroll area (set in buildRightPane).
+        this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+            if (pointer.x >= this.scrollAreaLeft && pointer.y >= this.scrollAreaTop) {
+                this.isDraggingScroll = true;
+                this.dragLastY = pointer.y;
+            }
+        });
+
+        this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+            if (!this.isDraggingScroll || !pointer.isDown) return;
+            const delta = pointer.y - this.dragLastY;
+            this.dragLastY = pointer.y;
+            // Only treat as scroll drag if the pointer moved more than 4px
+            // (avoids fighting with skill card click handlers on subtle jitter).
+            if (Math.abs(delta) > 4) {
+                this.targetScrollY += delta;
+                this.targetScrollY = Phaser.Math.Clamp(this.targetScrollY, -this.maxScroll, 0);
+            }
+        });
+
+        this.input.on('pointerup', () => {
+            this.isDraggingScroll = false;
         });
 
         this.buildUI();
     }
 
-    update(time: number, delta: number) {
-        // Momentum scrolling
+    update(_time: number, _delta: number) {
         if (this.scrollContainer) {
             this.currentScrollY += (this.targetScrollY - this.currentScrollY) * 0.15;
-            this.scrollContainer.y = this.currentScrollY;
+            // FIX: Add scrollBaseY so the container sits at the correct initial vertical
+            // position within rightPane. The original code only used currentScrollY which
+            // meant the container started at y=0 after scrollViewport was removed.
+            this.scrollContainer.y = this.scrollBaseY + this.currentScrollY;
         }
     }
 
@@ -82,16 +140,16 @@ export class LoadoutScene extends BaseScene {
         this.slotContainers.clear();
         this.targetScrollY = 0;
         this.currentScrollY = 0;
+        this.scrollBaseY = 0;
+        this.isDraggingScroll = false;
 
         this.uiContainer = this.add.container(0, 0);
 
-        // High-tech gradient background
         const bg = this.add.graphics();
         bg.fillGradientStyle(0x0a0a2a, 0x1a0a3a, 0x0a1a3a, 0x050515, 1, 1, 1, 1);
         bg.fillRect(0, 0, this.gameWidth, this.gameHeight);
         this.uiContainer.add(bg);
 
-        // Floating particles
         const particles = this.add.particles(0, 0, 'star_particle', {
             x: { min: 0, max: this.gameWidth },
             y: { min: this.gameHeight, max: this.gameHeight + 100 },
@@ -104,7 +162,6 @@ export class LoadoutScene extends BaseScene {
         });
         this.uiContainer.add(particles);
 
-        // Layout Dimensions
         const maxUiWidth = 1200 * this.scaleFactor;
         const uiWidth = Math.min(this.gameWidth, maxUiWidth);
         const offsetX = this.getCenteredX(uiWidth);
@@ -124,7 +181,6 @@ export class LoadoutScene extends BaseScene {
         this.buildLeftPane(leftWidth, this.gameHeight, topMargin, paneHeight, this.scaleFactor);
         this.buildRightPane(rightWidth, paneHeight, topMargin, offsetX, leftWidth, this.scaleFactor);
 
-        // Global Buttons
         const backBtn = this.createButton(100 * this.scaleFactor, 50 * this.scaleFactor, 'BACK', () => {
             this.scene.start('LobbyScene', { selectedCharId: this.charId });
         }, 0xef4444, 120 * this.scaleFactor, this.scaleFactor);
@@ -138,9 +194,8 @@ export class LoadoutScene extends BaseScene {
         this.updateVisuals();
     }
 
-    private buildLeftPane(width: number, height: number, topMargin: number, paneHeight: number, scaleFactor: number = 1) {
+    private buildLeftPane(width: number, _height: number, topMargin: number, paneHeight: number, scaleFactor: number = 1) {
         const portraitSize = Math.min(180 * scaleFactor, width * 0.6);
-        // Left Pane Background with margins
         const bg = this.add.rectangle(0, topMargin, width, paneHeight, 0x050b14, 0.85)
             .setOrigin(0, 0)
             .setStrokeStyle(2, 0x1e3a8a, 0.5);
@@ -150,16 +205,13 @@ export class LoadoutScene extends BaseScene {
         const padding = 40 * scaleFactor;
         let currentY = topMargin + padding;
 
-        // Portrait Frame (Glowing Ring)
         const frame = this.add.circle(centerX, currentY + portraitSize/2, portraitSize/2 + 4 * scaleFactor, 0x000000, 0.5)
             .setStrokeStyle(3, 0x3b82f6, 0.8);
         this.leftPane.add(frame);
 
-        // Portrait
         const portrait = this.add.image(centerX, currentY + portraitSize/2, this.charData.portrait)
             .setDisplaySize(portraitSize, portraitSize * 1.2);
         
-        // Soft gradient mask for portrait (Circle mask instead of rect)
         const maskShape = this.make.graphics({ x: 0, y: 0 });
         maskShape.fillStyle(0xffffff);
         maskShape.fillCircle(centerX, currentY + portraitSize/2, portraitSize/2);
@@ -168,7 +220,6 @@ export class LoadoutScene extends BaseScene {
         this.leftPane.add(portrait);
         currentY += portraitSize + 30 * scaleFactor;
 
-        // Name & Class
         const nameText = this.add.text(centerX, currentY, this.charData.name.toUpperCase(), {
             fontSize: `${Math.floor(36 * scaleFactor)}px`, fontFamily: 'monospace', color: '#ffffff', fontStyle: 'bold'
         }).setOrigin(0.5).setShadow(0, 2, '#000000', 4, false, true);
@@ -179,7 +230,6 @@ export class LoadoutScene extends BaseScene {
         }).setOrigin(0.5).setShadow(0, 1, '#000000', 2, false, true);
         currentY += 45 * scaleFactor;
 
-        // Stats Grid
         const statsBg = this.add.rectangle(centerX, currentY + 30 * scaleFactor, width * 0.85, 80 * scaleFactor, 0x0f172a, 0.8)
             .setStrokeStyle(1, 0x1e293b);
         this.leftPane.add(statsBg);
@@ -204,20 +254,17 @@ export class LoadoutScene extends BaseScene {
         this.leftPane.add([nameText, classText]);
         currentY += 100 * scaleFactor;
 
-        // Loadout Visualizer
         const loadoutTitle = this.add.text(centerX, currentY, 'CURRENT LOADOUT', {
             fontSize: `${Math.floor(14 * scaleFactor)}px`, fontFamily: 'monospace', color: '#94a3b8', fontStyle: 'bold', letterSpacing: 2 * scaleFactor
         }).setOrigin(0.5);
         this.leftPane.add(loadoutTitle);
         currentY += 30 * scaleFactor;
 
-        // Create Slots
         this.createSlot(centerX, currentY, 'PASSIVE', 'passive', width * 0.8, scaleFactor);
         currentY += 72 * scaleFactor;
         this.createSlot(centerX, currentY, 'ULTIMATE', 'active', width * 0.8, scaleFactor);
         currentY += 72 * scaleFactor;
         
-        // 3 Stack Slots in a row
         const stackWidth = (width * 0.8 - 20 * scaleFactor) / 3;
         const stackSpacing = stackWidth + 10 * scaleFactor;
         this.createSlot(centerX - stackSpacing, currentY, 'STACK 1', 'stack_0', stackWidth, scaleFactor);
@@ -246,9 +293,8 @@ export class LoadoutScene extends BaseScene {
 
     private buildRightPane(width: number, paneHeight: number, topMargin: number, offsetX: number, leftWidth: number, scaleFactor: number = 1) {
         const headerHeight = 80 * scaleFactor;
-        const footerHeight = 20 * scaleFactor; // Reduced footer height since we use paneHeight now
+        const footerHeight = 20 * scaleFactor;
         
-        // Header Title
         const title = this.add.text(40 * scaleFactor, topMargin + 50 * scaleFactor, 'ARMORY', {
             fontSize: `${Math.floor(32 * scaleFactor)}px`, fontFamily: 'monospace', color: '#ffffff', fontStyle: 'bold', letterSpacing: 4 * scaleFactor
         }).setOrigin(0, 0.5).setShadow(0, 2, '#3b82f6', 10, false, true);
@@ -256,32 +302,45 @@ export class LoadoutScene extends BaseScene {
         const titleUnderline = this.add.rectangle(40 * scaleFactor, topMargin + 70 * scaleFactor, 120 * scaleFactor, 2 * scaleFactor, 0x3b82f6).setOrigin(0, 0.5);
         this.rightPane.add([title, titleUnderline]);
 
-        const scrollViewport = this.add.container(0, topMargin + headerHeight);
-        this.rightPane.add(scrollViewport);
+        // FIX: Remove the scrollViewport middleman. scrollContainer is now placed
+        // directly in rightPane at the correct initial Y position (topMargin + headerHeight).
+        // Previously: rightPane → scrollViewport (mask here) → scrollContainer (moves)
+        // Now:        rightPane → scrollContainer (mask here, also moves)
+        //
+        // Applying the GeometryMask to a nested child Container in Phaser 3 is unreliable
+        // — the mask may not propagate through two container levels. Placing the mask on
+        // the SAME object whose children we want clipped (scrollContainer) guarantees it works.
+        this.scrollBaseY = topMargin + headerHeight;
+        this.scrollContainer = this.add.container(0, this.scrollBaseY);
+        this.rightPane.add(this.scrollContainer);
 
-        this.scrollContainer = this.add.container(0, 0);
-        scrollViewport.add(this.scrollContainer);
-
-        // Mask
-        const maskShape = this.make.graphics({ x: 0, y: 0 });
-        maskShape.fillStyle(0xffffff);
-        
-        // Define mask in absolute coordinates to match scrollContainer position
-        const maskHeight = paneHeight - headerHeight - footerHeight;
-        maskShape.fillRect(offsetX + leftWidth, topMargin + headerHeight, width, maskHeight);
-        scrollViewport.setMask(maskShape.createGeometryMask());
+        // Store the left edge and top edge of the scrollable area in SCENE space
+        // (not container-local) so the drag handler knows when the pointer is inside it.
+        this.scrollAreaLeft = offsetX + leftWidth;
+        this.scrollAreaTop  = topMargin + headerHeight;
 
         let currentY = 10 * scaleFactor;
 
         const passives = this.availableSkills.filter(s => s.type === SkillType.PASSIVE);
-        const actives = this.availableSkills.filter(s => s.type === SkillType.ACTIVE);
-        const stacks = this.availableSkills.filter(s => s.type === SkillType.STACK);
+        const actives  = this.availableSkills.filter(s => s.type === SkillType.ACTIVE);
+        const stacks   = this.availableSkills.filter(s => s.type === SkillType.STACK);
 
         currentY = this.renderSkillSection(currentY, width, 'PASSIVE ABILITIES', passives, scaleFactor);
         currentY = this.renderSkillSection(currentY, width, 'ULTIMATE PROTOCOLS', actives, scaleFactor);
         currentY = this.renderSkillSection(currentY, width, 'TACTICAL STACKS', stacks, scaleFactor);
 
+        const maskHeight = paneHeight - headerHeight - footerHeight;
         this.maxScroll = Math.max(0, currentY - maskHeight);
+
+        // FIX: Apply the geometry mask DIRECTLY to scrollContainer (not to a parent wrapper).
+        // The mask rect is drawn at the world-space position of the scrollable area so it
+        // clips content that travels outside the viewport when scrollContainer.y changes.
+        // Because GeometryMask coordinates are in screen/world space (not container-local),
+        // we use: offsetX + leftWidth = world X where rightPane starts.
+        const maskShape = this.make.graphics({ x: 0, y: 0 });
+        maskShape.fillStyle(0xffffff);
+        maskShape.fillRect(offsetX + leftWidth, topMargin + headerHeight, width, maskHeight);
+        this.scrollContainer.setMask(maskShape.createGeometryMask());
     }
 
     private renderSkillSection(y: number, paneWidth: number, title: string, skills: SkillData[], scaleFactor: number = 1): number {
@@ -292,19 +351,13 @@ export class LoadoutScene extends BaseScene {
         }).setShadow(0, 1, '#000000', 2, false, true);
         this.scrollContainer.add(sectionTitle);
 
-        const cardWidth = 240 * scaleFactor;
+        const cardWidth  = 240 * scaleFactor;
         const cardHeight = 140 * scaleFactor;
-        const spacing = 25 * scaleFactor;
-        
-        // Enforce exactly 2 columns
-        const maxCols = 2;
-        
-        // Calculate the total width of the 2-column grid
+        const spacing    = 25 * scaleFactor;
+        const maxCols    = 2;
+
         const gridWidth = (cardWidth * maxCols) + (spacing * (maxCols - 1));
-        
-        // Center the grid within the paneWidth
-        // startX is the center of the first card in the grid
-        const startX = (paneWidth - gridWidth) / 2 + (cardWidth / 2);
+        const startX    = (paneWidth - gridWidth) / 2 + (cardWidth / 2);
         
         let maxRow = -1;
 
@@ -341,29 +394,24 @@ export class LoadoutScene extends BaseScene {
                 });
             }
 
-            // Skill Icon
             const iconSize = 40 * scaleFactor;
             const icon = this.add.image(-cardWidth/2 + 30 * scaleFactor, -cardHeight/2 + 30 * scaleFactor, skill.icon)
                 .setDisplaySize(iconSize, iconSize);
             
-            // Skill Name
             const name = this.add.text(-cardWidth/2 + 60 * scaleFactor, -cardHeight/2 + 30 * scaleFactor, skill.name, {
                 fontSize: `${Math.floor(15 * scaleFactor)}px`, fontFamily: 'monospace', color: '#f8fafc', fontStyle: 'bold'
             }).setOrigin(0, 0.5);
 
-            // Cost Indicator
             const costBg = this.add.rectangle(cardWidth/2 - 25 * scaleFactor, -cardHeight/2 + 30 * scaleFactor, 30 * scaleFactor, 20 * scaleFactor, 0x000000, 0.6).setStrokeStyle(1, 0x333333);
             const cost = this.add.text(cardWidth/2 - 25 * scaleFactor, -cardHeight/2 + 30 * scaleFactor, `${skill.chargeCost}`, {
                 fontSize: `${Math.floor(12 * scaleFactor)}px`, fontFamily: 'monospace', color: '#fbbf24', fontStyle: 'bold'
             }).setOrigin(0.5);
 
-            // Description
             const desc = this.add.text(0, 15 * scaleFactor, skill.description, {
                 fontSize: `${Math.floor(11 * scaleFactor)}px`, fontFamily: 'monospace', color: '#94a3b8', align: 'left', wordWrap: { width: cardWidth - 40 * scaleFactor }
             }).setOrigin(0.5, 0);
 
-            // Equipped Badge (Hidden by default)
-            const equippedBg = this.add.rectangle(0, cardHeight/2 - 12 * scaleFactor, 80 * scaleFactor, 16 * scaleFactor, 0x10b981, 1);
+            const equippedBg   = this.add.rectangle(0, cardHeight/2 - 12 * scaleFactor, 80 * scaleFactor, 16 * scaleFactor, 0x10b981, 1);
             const equippedText = this.add.text(0, cardHeight/2 - 12 * scaleFactor, 'EQUIPPED', {
                 fontSize: `${Math.floor(10 * scaleFactor)}px`, fontFamily: 'monospace', color: '#000000', fontStyle: 'bold'
             }).setOrigin(0.5);
@@ -418,18 +466,16 @@ export class LoadoutScene extends BaseScene {
     }
 
     private updateVisuals() {
-        // Update Cards
         this.skillCards.forEach((container, id) => {
-            const bg = container.list[0] as Phaser.GameObjects.Rectangle;
+            const bg   = container.list[0] as Phaser.GameObjects.Rectangle;
             const glow = container.list[1] as Phaser.GameObjects.Rectangle;
             const equippedBadge = container.getData('equippedBadge') as Phaser.GameObjects.Container;
             const isSelected = this.isSkillSelected(id);
-            const isHovered = container.getData('hovered');
+            const isHovered  = container.getData('hovered');
 
-            // Stop scale tweens
             const tweens = this.tweens.getTweensOf(container);
             tweens.forEach(t => {
-                if (t.data && t.data.some(d => d.key === 'scaleX' || d.key === 'scaleY' || d.key === 'scale')) {
+                if (t.data && t.data.some((d: any) => d.key === 'scaleX' || d.key === 'scaleY' || d.key === 'scale')) {
                     t.stop();
                 }
             });
@@ -457,11 +503,10 @@ export class LoadoutScene extends BaseScene {
             this.tweens.add({ targets: container, scaleX: targetScale, scaleY: targetScale, duration: 200 });
         });
 
-        // Update Slots
         const updateSlot = (id: string, skillId: string | null) => {
             const container = this.slotContainers.get(id);
             if (!container) return;
-            const bg = container.list[0] as Phaser.GameObjects.Rectangle;
+            const bg   = container.list[0] as Phaser.GameObjects.Rectangle;
             const text = container.list[2] as Phaser.GameObjects.Text;
             
             if (skillId) {
@@ -479,7 +524,7 @@ export class LoadoutScene extends BaseScene {
         };
 
         updateSlot('passive', this.loadout.passive);
-        updateSlot('active', this.loadout.active);
+        updateSlot('active',  this.loadout.active);
         updateSlot('stack_0', this.loadout.stacks[0] || null);
         updateSlot('stack_1', this.loadout.stacks[1] || null);
         updateSlot('stack_2', this.loadout.stacks[2] || null);
@@ -508,8 +553,8 @@ export class LoadoutScene extends BaseScene {
         if (char) {
             char.loadout = {
                 passive: this.loadout.passive,
-                active: this.loadout.active,
-                stacks: this.loadout.stacks
+                active:  this.loadout.active,
+                stacks:  this.loadout.stacks
             };
         }
 

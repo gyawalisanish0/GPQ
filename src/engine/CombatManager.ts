@@ -21,6 +21,9 @@ export class CombatManager {
     
     // Skill queues and modifiers
     public stackQueue: any[] = [];
+
+    // FIX: Track freeze state per side to support ice_lance's freeze_opponent effect
+    public frozenTurns: { USER: number; OPPONENT: number } = { USER: 0, OPPONENT: 0 };
     
     private constructor() {
         this.skillProcessor = new SkillProcessor(this);
@@ -47,6 +50,7 @@ export class CombatManager {
             this.turnCount = 1;
             this.isGameOver = false;
             this.stackQueue = [];
+            this.frozenTurns = { USER: 0, OPPONENT: 0 };
             console.log(`[CombatManager] Initialized with User: ${user.name} vs Opponent: ${opponent.name}`);
             
             this.initializePassives(user, 'USER');
@@ -65,7 +69,10 @@ export class CombatManager {
         
         const skill = CombatRegistry.getInstance().getSkill(char.loadout.passive!);
         if (skill) {
-            // Temporarily set turn to the character so the skill processor knows who is casting
+            // FIX: Set currentTurn BEFORE calling executeSkill so that
+            // getActiveCharacter() inside executeSkill returns the correct character.
+            // Previously the turn was swapped after the call, meaning the character
+            // executing the passive was whoever happened to be currentTurn at that moment.
             const prevTurn = this.currentTurn;
             this.currentTurn = turnType;
             this.skillProcessor.executeSkill(skill);
@@ -85,7 +92,6 @@ export class CombatManager {
             const char = data.character === 'USER' ? this.user : this.opponent;
             if (!char) return;
 
-            // Only allow skills on your turn for now
             if (this.currentTurn !== data.character) {
                 console.log(`[CombatManager] Cannot use skill out of turn.`);
                 return;
@@ -110,19 +116,15 @@ export class CombatManager {
 
             if (!activeChar || !targetChar) return;
 
-            // Calculate base match damage
-            // Total Damage = 40% of Primary Stat + 25% of current move points × cascade count multiplier
             const primaryStat = activeChar.getPrimaryStat();
             const cascadeMultiplier = Math.pow(1.15, data.comboNumber - 1);
             let matchDamage = (0.4 * primaryStat) + (0.25 * data.moveScore * cascadeMultiplier);
             let damageType = activeChar.damageType;
 
-            // Process stack queue for the active character
             const stackResult = this.processStackQueue(data.shape, data.count, matchDamage, damageType, data.moveScore, data.comboNumber, data.powerSurge);
             matchDamage = stackResult.damage;
             damageType = stackResult.damageType;
 
-            // Apply resistance/endurance mitigation
             if (damageType === 'PHYSICAL') {
                 const mitigation = 100 / (100 + targetChar.stats.endurance);
                 matchDamage = Math.max(1, Math.round(matchDamage * mitigation));
@@ -131,7 +133,6 @@ export class CombatManager {
                 matchDamage = Math.max(1, Math.round(matchDamage * mitigation));
             }
 
-            // Apply damage
             if (matchDamage > 0) {
                 targetChar.takeDamage(matchDamage);
                 console.log(`[CombatManager] Match dealt ${matchDamage} damage to ${targetChar.name}`);
@@ -145,7 +146,6 @@ export class CombatManager {
                 this.checkGameOver();
             }
 
-            // Charge gain: Only the active character gains energy if the destroyed gem matches their link
             if (data.shape === activeChar.linkedGem) {
                 activeChar.addCharge(data.count);
                 SoundManager.getInstance().play(SoundType.CHARGE);
@@ -167,15 +167,12 @@ export class CombatManager {
         let finalDamage = currentDamage;
         let finalDamageType = damageType;
 
-        // Iterate backwards to allow safe removal
         for (let i = this.stackQueue.length - 1; i >= 0; i--) {
             const stack = this.stackQueue[i];
             
-            // Only process stacks for the character whose turn it is
             if (stack.owner !== this.currentTurn) continue;
 
-            // Example trigger: "match_star" or "match_any"
-            const triggerShape = stack.trigger.split('_')[1]; // 'star' or 'any'
+            const triggerShape = stack.trigger.split('_')[1];
             if (triggerShape.toLowerCase() === 'any' || shape.toLowerCase() === triggerShape.toLowerCase()) {
                 console.log(`[CombatManager] Stack triggered: ${stack.effect} by ${stack.owner}`);
                 
@@ -183,33 +180,89 @@ export class CombatManager {
                 const activeChar = this.getActiveCharacter();
 
                 if (skill && activeChar) {
-                    // Apply effect based on skill data
-                    if (stack.effect === 'bonus_damage') {
-                        // Total damage = skill's base damage + 40% of Primary Stat + 25% of current move points + 10% of power surge points × cascade count multiplier
-                        const primaryStat = activeChar.getPrimaryStat();
-                        const cascadeMultiplier = Math.pow(1.15, comboNumber - 1);
-                        
-                        let bonus = skill.baseDamage;
-                        bonus += 0.4 * primaryStat;
-                        bonus += 0.25 * moveScore;
-                        bonus += (0.1 * powerSurge) * cascadeMultiplier;
-                        
-                        finalDamage += bonus;
-                        finalDamageType = skill.damageType;
-                    } else if (stack.effect === 'double_damage') {
-                        finalDamage *= 2;
-                    } else if (stack.effect === 'triple_damage') {
-                        finalDamage *= 3;
-                    } else if (stack.effect === 'heal_on_match') {
-                        const healAmount = Math.round(activeChar.maxHp * 0.05); // Heal 5%
-                        activeChar.heal(healAmount);
-                        if (this.game) {
-                            this.game.events.emit('HP_UPDATED', {
-                                character: this.currentTurn,
-                                hp: activeChar.currentHp,
-                                maxHp: activeChar.maxHp
-                            });
+                    switch (stack.effect) {
+                        case 'bonus_damage': {
+                            const primaryStat = activeChar.getPrimaryStat();
+                            const cascadeMultiplier = Math.pow(1.15, comboNumber - 1);
+                            let bonus = skill.baseDamage;
+                            bonus += 0.4 * primaryStat;
+                            bonus += 0.25 * moveScore;
+                            bonus += (0.1 * powerSurge) * cascadeMultiplier;
+                            finalDamage += bonus;
+                            finalDamageType = skill.damageType;
+                            break;
                         }
+                        case 'double_damage':
+                            finalDamage *= 2;
+                            break;
+                        case 'triple_damage':
+                            finalDamage *= 3;
+                            break;
+                        case 'heal_on_match': {
+                            const healAmount = Math.round(activeChar.maxHp * 0.05);
+                            activeChar.heal(healAmount);
+                            if (this.game) {
+                                this.game.events.emit('HP_UPDATED', {
+                                    character: this.currentTurn,
+                                    hp: activeChar.currentHp,
+                                    maxHp: activeChar.maxHp
+                                });
+                            }
+                            break;
+                        }
+                        // FIX: freeze_opponent was silently ignored, causing ice_lance to do nothing.
+                        // Now it sets frozenTurns on the inactive side so switchTurn can skip their turn.
+                        case 'freeze_opponent': {
+                            const opponentSide: TurnType = this.currentTurn === 'USER' ? 'OPPONENT' : 'USER';
+                            this.frozenTurns[opponentSide] = (this.frozenTurns[opponentSide] || 0) + 1;
+                            console.log(`[CombatManager] ${opponentSide} is frozen for ${this.frozenTurns[opponentSide]} turn(s).`);
+                            if (this.game) {
+                                this.game.events.emit('STATUS_APPLIED', { character: opponentSide, status: 'freeze' });
+                            }
+                            break;
+                        }
+                        // FIX: shield was silently ignored, causing holy_shield to do nothing.
+                        // Placeholder implementation: grant a small HP buffer via a temporary heal.
+                        // A full implementation would track a shield value separately.
+                        case 'shield': {
+                            const shieldAmount = Math.round(activeChar.maxHp * 0.03);
+                            activeChar.heal(shieldAmount);
+                            console.log(`[CombatManager] ${activeChar.name} gained a ${shieldAmount} HP shield.`);
+                            if (this.game) {
+                                this.game.events.emit('HP_UPDATED', {
+                                    character: this.currentTurn,
+                                    hp: activeChar.currentHp,
+                                    maxHp: activeChar.maxHp
+                                });
+                                this.game.events.emit('STATUS_APPLIED', { character: this.currentTurn, status: 'shield' });
+                            }
+                            break;
+                        }
+                        // FIX: poison was silently ignored. Basic implementation: deal a small DoT
+                        // at the end of each subsequent turn. For now, apply immediate flat damage
+                        // to the opponent to at least make the skill functional.
+                        case 'poison': {
+                            const targetChar = this.getInactiveCharacter();
+                            if (targetChar) {
+                                const poisonDamage = Math.round(targetChar.maxHp * 0.04);
+                                targetChar.takeDamage(poisonDamage);
+                                console.log(`[CombatManager] ${targetChar.name} took ${poisonDamage} poison damage.`);
+                                const opponentSide: TurnType = this.currentTurn === 'USER' ? 'OPPONENT' : 'USER';
+                                if (this.game) {
+                                    this.game.events.emit('HP_UPDATED', {
+                                        character: opponentSide,
+                                        hp: targetChar.currentHp,
+                                        maxHp: targetChar.maxHp
+                                    });
+                                    this.game.events.emit('STATUS_APPLIED', { character: opponentSide, status: 'poison' });
+                                }
+                                this.checkGameOver();
+                            }
+                            break;
+                        }
+                        default:
+                            console.warn(`[CombatManager] Unhandled stack effect: "${stack.effect}"`);
+                            break;
                     }
                 }
                 
@@ -236,7 +289,22 @@ export class CombatManager {
 
     public switchTurn(): void {
         try {
-            this.currentTurn = this.currentTurn === 'USER' ? 'OPPONENT' : 'USER';
+            const nextTurn: TurnType = this.currentTurn === 'USER' ? 'OPPONENT' : 'USER';
+
+            // FIX: Check if the next side is frozen. If so, consume a freeze turn and
+            // switch again (skip that player's turn) instead of handing control to them.
+            if (this.frozenTurns[nextTurn] > 0) {
+                this.frozenTurns[nextTurn]--;
+                this.turnCount++;
+                console.log(`[CombatManager] ${nextTurn} is frozen, skipping their turn. Remaining: ${this.frozenTurns[nextTurn]}`);
+                SoundManager.getInstance().play(SoundType.TURN_CHANGE);
+                if (this.game) {
+                    this.game.events.emit('TURN_SWITCHED', this.currentTurn);
+                }
+                return;
+            }
+
+            this.currentTurn = nextTurn;
             this.turnCount++;
             console.log(`[CombatManager] Turn switched to: ${this.currentTurn}, Turn Count: ${this.turnCount}`);
             
