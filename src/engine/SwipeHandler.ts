@@ -11,12 +11,14 @@ export class SwipeHandler {
   private cellSize: number;
   private offsetX: number;
   private offsetY: number;
+  private gridSize: number;
 
   constructor(
     scene: Phaser.Scene,
     cellSize: number,
     offsetX: number,
     offsetY: number,
+    gridSize: number,
     onSwipe: (start: { r: number; c: number }, end: { r: number; c: number }) => void,
     onPointerMove?: (r: number, c: number) => void,
     onPointerDown?: (r: number, c: number) => void,
@@ -26,6 +28,7 @@ export class SwipeHandler {
     this.cellSize = cellSize;
     this.offsetX = offsetX;
     this.offsetY = offsetY;
+    this.gridSize = gridSize;
     this.onSwipe = onSwipe;
     this.onPointerMove = onPointerMove;
     this.onPointerDown = onPointerDown;
@@ -40,7 +43,7 @@ export class SwipeHandler {
     if (pointer.isDown && this.onPointerMove) {
       const c = Math.floor((pointer.worldX - this.offsetX) / this.cellSize);
       const r = Math.floor((pointer.worldY - this.offsetY) / this.cellSize);
-      if (r >= 0 && r < 8 && c >= 0 && c < 8) {
+      if (r >= 0 && r < this.gridSize && c >= 0 && c < this.gridSize) {
         this.onPointerMove(r, c);
       }
     }
@@ -50,7 +53,7 @@ export class SwipeHandler {
     const c = Math.floor((pointer.worldX - this.offsetX) / this.cellSize);
     const r = Math.floor((pointer.worldY - this.offsetY) / this.cellSize);
 
-    if (r >= 0 && r < 8 && c >= 0 && c < 8) {
+    if (r >= 0 && r < this.gridSize && c >= 0 && c < this.gridSize) {
       // Check for Tap-to-Swap
       if (this.selectedCell && (this.selectedCell.r !== r || this.selectedCell.c !== c)) {
         const dr = Math.abs(this.selectedCell.r - r);
@@ -101,7 +104,7 @@ export class SwipeHandler {
         targetR += dy > 0 ? 1 : -1;
       }
 
-      if (targetR >= 0 && targetR < 8 && targetC >= 0 && targetC < 8) {
+      if (targetR >= 0 && targetR < this.gridSize && targetC >= 0 && targetC < this.gridSize) {
         this.onSwipe(this.selectedCell, { r: targetR, c: targetC });
         this.dragStartPos = null;
         this.selectedCell = null;

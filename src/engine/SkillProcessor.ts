@@ -154,7 +154,7 @@ export class SkillProcessor {
                     effect: action.effect,
                     charges: action.charges,
                     owner: this.combatManager.currentTurn,
-                    icon: action.icon, // Assuming icon is part of the action
+                    icon: skill.icon,
                     skillId: skill.id,
                     chargeCost: skill.chargeCost
                 });
@@ -162,7 +162,7 @@ export class SkillProcessor {
                 if (this.game) {
                     this.game.events.emit('SKILL_QUEUED', {
                         character: this.combatManager.currentTurn,
-                        icon: action.icon,
+                        icon: skill.icon,
                         skillId: skill.id
                     });
                 }

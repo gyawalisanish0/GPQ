@@ -1,18 +1,19 @@
 import Phaser from 'phaser';
 import { CombatRegistry } from '../engine/CombatRegistry';
 import { CharacterData } from '../entities/Character';
+import { BaseScene } from './BaseScene';
 
-export class LobbyScene extends Phaser.Scene {
+export class LobbyScene extends BaseScene {
     private characters: CharacterData[] = [];
-    private gridContainer!: Phaser.GameObjects.Container;
     private selectedCharId: string | null = null;
     private charCards: Phaser.GameObjects.Container[] = [];
+    private uiContainer!: Phaser.GameObjects.Container;
 
     constructor() {
         super('LobbyScene');
     }
 
-    init(data: { selectedCharId?: string }) {
+    protected onInit(data: { selectedCharId?: string }) {
         this.characters = CombatRegistry.getInstance().getAllCharactersData();
         this.charCards = [];
         if (data && data.selectedCharId) {
@@ -23,39 +24,53 @@ export class LobbyScene extends Phaser.Scene {
     }
 
     create() {
-        const { width, height } = this.cameras.main;
-        const scaleFactor = Math.min(width / 1080, height / 1920);
+        this.buildUI();
+    }
+
+    protected onResize() {
+        this.buildUI();
+    }
+
+    private buildUI() {
+        if (this.uiContainer) {
+            this.uiContainer.destroy();
+        }
+        this.uiContainer = this.add.container(0, 0);
+        this.charCards = []; // Reset cards array on rebuild
 
         // Background
-        this.add.image(width / 2, height / 2, 'menu_bg').setDisplaySize(width, height).setAlpha(0.3);
+        const bg = this.add.image(this.centerX, this.centerY, 'menu_bg').setDisplaySize(this.gameWidth, this.gameHeight).setAlpha(0.3);
+        this.uiContainer.add(bg);
 
         // Title
-        this.add.text(width / 2, 80 * scaleFactor, 'SELECT YOUR HERO', {
-            fontSize: `${Math.floor(42 * scaleFactor)}px`,
+        const title = this.add.text(this.centerX, 80 * this.scaleFactor, 'SELECT YOUR HERO', {
+            fontSize: `${Math.floor(42 * this.scaleFactor)}px`,
             fontFamily: 'monospace',
             color: '#10b981',
             fontStyle: 'bold'
         }).setOrigin(0.5);
+        this.uiContainer.add(title);
 
-        this.createCharacterGrid(scaleFactor);
+        this.createCharacterGrid();
 
         // Back Button
-        const backBtn = this.createButton(100 * scaleFactor, 50 * scaleFactor, 'BACK', () => {
+        const backBtn = this.createButton(100 * this.scaleFactor, 50 * this.scaleFactor, 'BACK', () => {
             this.scene.start('MainMenuScene');
-        }, 0xef4444, scaleFactor);
+        }, 0xef4444);
+        this.uiContainer.add(backBtn);
 
         // Next Button (Initially hidden or disabled-looking)
-        const nextBtn = this.createButton(width - 100 * scaleFactor, height - 80 * scaleFactor, 'NEXT', () => {
+        const nextBtn = this.createButton(this.gameWidth - 100 * this.scaleFactor, this.gameHeight - 80 * this.scaleFactor, 'NEXT', () => {
             if (this.selectedCharId) {
                 this.scene.start('LoadoutScene', { charId: this.selectedCharId });
             }
-        }, 0x10b981, scaleFactor);
+        }, 0x10b981);
         nextBtn.setVisible(this.selectedCharId !== null);
         this.data.set('nextBtn', nextBtn);
+        this.uiContainer.add(nextBtn);
     }
 
-    private createCharacterGrid(scaleFactor: number = 1) {
-        const { width, height } = this.cameras.main;
+    private createCharacterGrid() {
         const maxCols = 3;
         const baseCardWidth = 240;
         const baseCardHeight = 320;
@@ -65,9 +80,9 @@ export class LobbyScene extends Phaser.Scene {
         const totalBaseWidth = (actualCols * baseCardWidth) + ((actualCols - 1) * baseSpacing);
 
         // Calculate scale to fit width with 10% padding on each side
-        const maxAvailableWidth = width * 0.8;
-        let scale = scaleFactor;
-        if (totalBaseWidth * scaleFactor > maxAvailableWidth) {
+        const maxAvailableWidth = this.gameWidth * 0.8;
+        let scale = this.scaleFactor;
+        if (totalBaseWidth * this.scaleFactor > maxAvailableWidth) {
             scale = maxAvailableWidth / totalBaseWidth;
         }
 
@@ -76,8 +91,8 @@ export class LobbyScene extends Phaser.Scene {
         const scaledSpacing = baseSpacing * scale;
 
         const totalScaledWidth = (actualCols * scaledCardWidth) + ((actualCols - 1) * scaledSpacing);
-        const startX = (width - totalScaledWidth) / 2 + scaledCardWidth / 2;
-        const startY = height * 0.4; // Center relative to height
+        const startX = (this.gameWidth - totalScaledWidth) / 2 + scaledCardWidth / 2;
+        const startY = this.gameHeight * 0.4; // Center relative to height
 
         this.characters.forEach((char, i) => {
             const col = i % maxCols;
@@ -144,6 +159,7 @@ export class LobbyScene extends Phaser.Scene {
 
             card.add([bg, glow, portrait, name, classLabel, statsContainer]);
             this.charCards.push(card);
+            this.uiContainer.add(card);
 
             this.tweens.add({
                 targets: card,
@@ -222,12 +238,12 @@ export class LobbyScene extends Phaser.Scene {
         }
     }
 
-    private createButton(x: number, y: number, label: string, callback: () => void, color: number, scaleFactor: number = 1) {
+    private createButton(x: number, y: number, label: string, callback: () => void, color: number) {
         const container = this.add.container(x, y);
-        const bg = this.add.rectangle(0, 0, 160 * scaleFactor, 50 * scaleFactor, color, 0.8)
+        const bg = this.add.rectangle(0, 0, 160 * this.scaleFactor, 50 * this.scaleFactor, color, 0.8)
             .setInteractive({ useHandCursor: true });
         const text = this.add.text(0, 0, label, {
-            fontSize: `${Math.floor(18 * scaleFactor)}px`,
+            fontSize: `${Math.floor(18 * this.scaleFactor)}px`,
             fontFamily: 'monospace',
             color: '#ffffff',
             fontStyle: 'bold'

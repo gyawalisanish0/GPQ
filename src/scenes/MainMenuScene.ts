@@ -3,8 +3,11 @@ import { GemRegistry, GemDefinition } from '../engine/GemRegistry';
 import { CombatRegistry } from '../engine/CombatRegistry';
 import { CharacterData } from '../entities/Character';
 import { SkillData } from '../entities/Skill';
+import { BaseScene } from './BaseScene';
 
-export class MainMenuScene extends Phaser.Scene {
+export class MainMenuScene extends BaseScene {
+  private uiContainer!: Phaser.GameObjects.Container;
+
   constructor() {
     super('MainMenuScene');
   }
@@ -69,90 +72,7 @@ export class MainMenuScene extends Phaser.Scene {
         });
       }
 
-      const { width, height } = this.cameras.main;
-      const scaleFactor = Math.min(width / 1080, height / 1920);
-
-      // Background
-      this.add.image(width / 2, height / 2, 'menu_bg').setDisplaySize(width, height);
-      
-      // Overlay
-      this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.5);
-
-      // Particle background
-      const particles = this.add.particles(0, 0, 'particle', {
-        x: { min: 0, max: width },
-        y: { min: 0, max: height },
-        speed: { min: 10 * scaleFactor, max: 50 * scaleFactor },
-        scale: { start: 0.4 * scaleFactor, end: 0 },
-        alpha: { start: 0.3, end: 0 },
-        lifespan: 3000,
-        frequency: 50,
-        blendMode: 'ADD',
-        tint: 0x10b981
-      });
-
-      // Title
-      const title = this.add.text(width / 2, height * 0.25, 'GENESIS', {
-        fontSize: `${Math.floor(140 * scaleFactor)}px`,
-        fontFamily: 'monospace',
-        color: '#ffffff',
-        fontStyle: 'bold',
-        letterSpacing: 25 * scaleFactor
-      }).setOrigin(0.5).setAlpha(0).setScale(0.8);
-
-      const subtitle = this.add.text(width / 2, height * 0.35, 'PUZZLE QUEST', {
-        fontSize: `${Math.floor(36 * scaleFactor)}px`,
-        fontFamily: 'monospace',
-        color: '#10b981',
-        fontStyle: 'bold',
-        letterSpacing: 15 * scaleFactor
-      }).setOrigin(0.5).setAlpha(0);
-
-      this.tweens.add({
-        targets: title,
-        alpha: 1,
-        scale: 1,
-        duration: 1500,
-        ease: 'Cubic.easeOut'
-      });
-
-      this.tweens.add({
-        targets: subtitle,
-        alpha: 1,
-        y: height * 0.38,
-        duration: 1000,
-        delay: 500,
-        ease: 'Cubic.easeOut'
-      });
-
-      // Buttons
-      const buttonY = height * 0.65;
-      const spacing = 90 * scaleFactor;
-
-      const startBtn = this.createMenuButton(width / 2, buttonY, 'START GAME', () => {
-        this.scene.start('LobbyScene');
-      }, 0x10b981, scaleFactor);
-
-      const optionsBtn = this.createMenuButton(width / 2, buttonY + spacing, 'OPTIONS', () => {
-        console.log('Options clicked');
-      }, 0x3b82f6, scaleFactor);
-
-      const exitBtn = this.createMenuButton(width / 2, buttonY + spacing * 2, 'EXIT', () => {
-        console.log('Exit clicked');
-      }, 0xef4444, scaleFactor);
-
-      [startBtn, optionsBtn, exitBtn].forEach((btn, i) => {
-        btn.setAlpha(0);
-        btn.x -= 50;
-        this.tweens.add({
-          targets: btn,
-          alpha: 1,
-          x: width / 2,
-          duration: 800,
-          delay: 1000 + i * 200,
-          ease: 'Back.easeOut'
-        });
-      });
+      this.buildUI();
 
       this.game.events.emit('SCENE_READY', 'MainMenuScene');
     } catch (error) {
@@ -160,22 +80,123 @@ export class MainMenuScene extends Phaser.Scene {
     }
   }
 
-  private createMenuButton(x: number, y: number, label: string, callback: () => void, color: number, scaleFactor: number = 1) {
-    const container = this.add.container(x, y);
+  protected onResize() {
+    this.buildUI();
+  }
+
+  private buildUI() {
+    if (this.uiContainer) {
+      this.uiContainer.destroy();
+    }
+    this.uiContainer = this.add.container(0, 0);
+
+    // Background
+    const bg = this.add.image(this.centerX, this.centerY, 'menu_bg').setDisplaySize(this.gameWidth, this.gameHeight);
+    this.uiContainer.add(bg);
     
-    const bg = this.add.rectangle(0, 0, 360 * scaleFactor, 70 * scaleFactor, 0x000000, 0.7)
-        .setStrokeStyle(2, color)
-        .setInteractive({ useHandCursor: true });
-    
-    const glow = this.add.rectangle(0, 0, 360 * scaleFactor, 70 * scaleFactor, color, 0)
-        .setStrokeStyle(4, color);
-    
-    const text = this.add.text(0, 0, label, {
-      fontSize: `${Math.floor(28 * scaleFactor)}px`,
+    // Overlay
+    const overlay = this.add.rectangle(this.centerX, this.centerY, this.gameWidth, this.gameHeight, 0x000000, 0.5);
+    this.uiContainer.add(overlay);
+
+    // Particle background
+    const particles = this.add.particles(0, 0, 'particle', {
+      x: { min: 0, max: this.gameWidth },
+      y: { min: 0, max: this.gameHeight },
+      speed: { min: 10 * this.scaleFactor, max: 50 * this.scaleFactor },
+      scale: { start: 0.4 * this.scaleFactor, end: 0 },
+      alpha: { start: 0.3, end: 0 },
+      lifespan: 3000,
+      frequency: 50,
+      blendMode: 'ADD',
+      tint: 0x10b981
+    });
+    this.uiContainer.add(particles);
+
+    // Title
+    const title = this.add.text(this.centerX, this.gameHeight * 0.25, 'GENESIS', {
+      fontSize: `${Math.floor(140 * this.scaleFactor)}px`,
       fontFamily: 'monospace',
       color: '#ffffff',
       fontStyle: 'bold',
-      letterSpacing: 4 * scaleFactor
+      letterSpacing: 25 * this.scaleFactor
+    }).setOrigin(0.5).setAlpha(0).setScale(0.8);
+    this.uiContainer.add(title);
+
+    const subtitle = this.add.text(this.centerX, this.gameHeight * 0.35, 'PUZZLE QUEST', {
+      fontSize: `${Math.floor(36 * this.scaleFactor)}px`,
+      fontFamily: 'monospace',
+      color: '#10b981',
+      fontStyle: 'bold',
+      letterSpacing: 15 * this.scaleFactor
+    }).setOrigin(0.5).setAlpha(0);
+    this.uiContainer.add(subtitle);
+
+    this.tweens.add({
+      targets: title,
+      alpha: 1,
+      scale: 1,
+      duration: 1500,
+      ease: 'Cubic.easeOut'
+    });
+
+    this.tweens.add({
+      targets: subtitle,
+      alpha: 1,
+      y: this.gameHeight * 0.38,
+      duration: 1000,
+      delay: 500,
+      ease: 'Cubic.easeOut'
+    });
+
+    // Buttons
+    const buttonY = this.gameHeight * 0.65;
+    const spacing = 90 * this.scaleFactor;
+
+    const startBtn = this.createMenuButton(this.centerX, buttonY, 'START GAME', () => {
+      this.scene.start('LobbyScene');
+    }, 0x10b981);
+    this.uiContainer.add(startBtn);
+
+    const optionsBtn = this.createMenuButton(this.centerX, buttonY + spacing, 'OPTIONS', () => {
+      console.log('Options clicked');
+    }, 0x3b82f6);
+    this.uiContainer.add(optionsBtn);
+
+    const exitBtn = this.createMenuButton(this.centerX, buttonY + spacing * 2, 'EXIT', () => {
+      console.log('Exit clicked');
+    }, 0xef4444);
+    this.uiContainer.add(exitBtn);
+
+    [startBtn, optionsBtn, exitBtn].forEach((btn, i) => {
+      btn.setAlpha(0);
+      btn.x -= 50;
+      this.tweens.add({
+        targets: btn,
+        alpha: 1,
+        x: this.centerX,
+        duration: 800,
+        delay: 1000 + i * 200,
+        ease: 'Back.easeOut'
+      });
+    });
+  }
+
+  private createMenuButton(x: number, y: number, label: string, callback: () => void, color: number) {
+    const container = this.add.container(x, y);
+    
+    const bg = this.add.rectangle(0, 0, 360 * this.scaleFactor, 70 * this.scaleFactor, 0x000000, 0.7)
+        .setStrokeStyle(2, color)
+        .setInteractive({ useHandCursor: true });
+    
+    const glow = this.add.rectangle(0, 0, 360 * this.scaleFactor, 70 * this.scaleFactor, color, 0)
+        .setStrokeStyle(4, color);
+    
+    const text = this.add.text(0, 0, label, {
+      fontSize: `${Math.floor(28 * this.scaleFactor)}px`,
+      fontFamily: 'monospace',
+      color: '#ffffff',
+      fontStyle: 'bold',
+      letterSpacing: 4 * this.scaleFactor
     }).setOrigin(0.5);
 
     container.add([bg, glow, text]);

@@ -9,6 +9,7 @@ import { OpponentAI } from '../engine/OpponentAI';
 
 import { GemRegistry } from '../engine/GemRegistry';
 import { SoundManager, SoundType } from '../engine/SoundManager';
+import { BaseScene } from './BaseScene';
 
 let GRID_SIZE = 10;
 let CELL_SIZE = 88;
@@ -16,11 +17,17 @@ let BASE_GRID_WIDTH = 880;
 
 // HUD Parameters
 let HUD_CONFIG = {
-  width: 480,
+  userWidth: 720,
+  opponentWidth: 480,
+  userHeight: 270,
+  opponentHeight: 180,
+  userBarWidth: 608,
+  opponentBarWidth: 372,
   padding: 20,
-  barHeight: 14,
-  barWidth: 200,
+  barHeight: 21,
   skillSize: 128,
+  marginX: 24,
+  marginY: 96,
   colors: {
     hp: 0x10b981, // emerald-500
     charge: 0x3b82f6, // blue-500
@@ -35,7 +42,7 @@ interface VisualCell {
   sprite: Phaser.GameObjects.Container;
 }
 
-export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
+export class Game_Scene extends BaseScene implements IEffectDelegate {
   constructor() {
     super('Game_Scene');
   }
@@ -66,32 +73,31 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
   private userGlow!: Phaser.GameObjects.Graphics;
   private opponentGlow!: Phaser.GameObjects.Graphics;
   private turnHUD!: Phaser.GameObjects.Container;
+  private powerHUD!: Phaser.GameObjects.Container;
   private turnCountText!: Phaser.GameObjects.Text;
   private activeSkillBtn!: Phaser.GameObjects.Container;
   private queuedIconsContainer!: Phaser.GameObjects.Container;
   private opponentQueuedIconsContainer!: Phaser.GameObjects.Container;
-  private scaleFactor: number = 1;
 
-  init() {
+  protected onInit() {
     this.isGameOver = false;
 
-    // Calculate responsive sizes
-    const { width, height } = this.cameras.main;
-    const isLandscape = width > height;
-    
-    // Base scale factor based on 1080x1920
-    this.scaleFactor = Math.min(width / 1080, height / 1920);
-    
     CELL_SIZE = Math.floor(88 * this.scaleFactor);
     BASE_GRID_WIDTH = CELL_SIZE * GRID_SIZE;
     
     HUD_CONFIG = {
       ...HUD_CONFIG,
-      width: Math.floor(480 * this.scaleFactor),
+      userWidth: Math.floor(720 * this.scaleFactor),
+      opponentWidth: Math.floor(480 * this.scaleFactor),
+      userHeight: Math.floor(270 * this.scaleFactor),
+      opponentHeight: Math.floor(180 * this.scaleFactor),
+      userBarWidth: Math.floor(608 * this.scaleFactor),
+      opponentBarWidth: Math.floor(372 * this.scaleFactor),
       padding: Math.floor(20 * this.scaleFactor),
-      barHeight: Math.floor(14 * this.scaleFactor),
-      barWidth: Math.floor(200 * this.scaleFactor),
-      skillSize: Math.floor(128 * this.scaleFactor)
+      barHeight: Math.floor(21 * this.scaleFactor),
+      skillSize: Math.floor(128 * this.scaleFactor),
+      marginX: Math.floor(24 * this.scaleFactor),
+      marginY: Math.floor(96 * this.scaleFactor)
     };
 
     // Load gem configurations from registry
@@ -394,10 +400,11 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
     }
     this.effectManager = new EffectManager(this);
 
-    const { width, height } = this.cameras.main;
+    const width = this.gameWidth;
+    const height = this.gameHeight;
     const gridWidth = GRID_SIZE * CELL_SIZE;
-    const offsetX = (width - gridWidth) / 2;
-    const offsetY = (height - gridWidth) / 2;
+    const offsetX = this.getOffsetX();
+    const offsetY = this.getOffsetY();
 
     // Animated gradient background
     const bg = this.add.graphics();
@@ -461,7 +468,7 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
 
     this.initVisualGrid(offsetX, offsetY);
     
-    this.swipeHandler = new SwipeHandler(this, CELL_SIZE, offsetX, offsetY, (start, end) => {
+    this.swipeHandler = new SwipeHandler(this, CELL_SIZE, offsetX, offsetY, GRID_SIZE, (start, end) => {
       if (this.isProcessing) return;
       if (CombatManager.getInstance().currentTurn !== 'USER') return;
       this.swapCells(start.r, start.c, end.r, end.c);
@@ -497,39 +504,48 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
   }
 
   private createHUD() {
-    const { width, height } = this.cameras.main;
-    const offsetX = (width - BASE_GRID_WIDTH) / 2;
-    const offsetY = (height - BASE_GRID_WIDTH) / 2;
+    const width = this.gameWidth;
+    const height = this.gameHeight;
+    const offsetX = this.getOffsetX();
+    const offsetY = this.getOffsetY();
     const gridWidth = BASE_GRID_WIDTH;
 
     // --- Opponent HUD (Top Left) ---
-    this.opponentHUD = this.add.container(24 * this.scaleFactor, 96 * this.scaleFactor);
+    this.opponentHUD = this.add.container(HUD_CONFIG.marginX, HUD_CONFIG.marginY);
     this.drawCharacterHUD(this.opponentHUD, 'OPPONENT', false);
 
     // --- User HUD (Bottom Left) ---
-    this.userHUD = this.add.container(24 * this.scaleFactor, 1554 * this.scaleFactor);
+    this.userHUD = this.add.container(HUD_CONFIG.marginX, height - HUD_CONFIG.marginY - HUD_CONFIG.userHeight);
     this.drawCharacterHUD(this.userHUD, 'USER', true);
 
     // Queued Skills Container
     // Centered horizontally with the HUDs
     // User HUD is at offsetX, width 480. Center = offsetX + 240
-    this.queuedIconsContainer = this.add.container(offsetX + 240 * this.scaleFactor, offsetY + gridWidth + 20 * this.scaleFactor);
+    const opponentHudBottom = HUD_CONFIG.marginY + HUD_CONFIG.opponentHeight;
+    const boardTop = offsetY;
+    const opponentQueuedY = opponentHudBottom + (boardTop - opponentHudBottom) / 2;
+    
+    const boardBottom = offsetY + gridWidth;
+    const userHudTop = height - HUD_CONFIG.marginY - HUD_CONFIG.userHeight;
+    const userQueuedY = boardBottom + (userHudTop - boardBottom) / 2;
+
+    this.queuedIconsContainer = this.add.container(HUD_CONFIG.marginX + 240 * this.scaleFactor, userQueuedY);
     
     // Opponent HUD is at offsetX, width HUD_CONFIG.width (needs to be defined or estimated)
     // HUD_CONFIG.width is likely 320 based on previous code.
     // Position it between opponent HUD (offsetY - 172) and board (offsetY).
-    this.opponentQueuedIconsContainer = this.add.container(offsetX + 160 * this.scaleFactor, offsetY - 26 * this.scaleFactor);
+    this.opponentQueuedIconsContainer = this.add.container(HUD_CONFIG.marginX + 160 * this.scaleFactor, opponentQueuedY);
 
     this.game.events.on('SKILL_QUEUED', (data: { character: string, icon: string, skillId: string }) => {
         if (data.character === 'USER') {
-            const icon = this.add.image(0, 0, data.icon).setDisplaySize(64 * this.scaleFactor, 64 * this.scaleFactor).setInteractive({ useHandCursor: true });
+            const icon = this.add.image(0, 0, data.icon).setDisplaySize(84.5 * this.scaleFactor, 84.5 * this.scaleFactor).setInteractive({ useHandCursor: true });
             icon.setData('skillId', data.skillId);
             icon.on('pointerdown', () => {
                 CombatManager.getInstance().removeQueuedSkill(data.skillId, 'USER');
             });
             this.queuedIconsContainer.add(icon);
             this.queuedIconsContainer.getAll().forEach((child, index) => {
-                (child as Phaser.GameObjects.Image).x = (index - (this.queuedIconsContainer.length - 1) / 2) * 70 * this.scaleFactor;
+                (child as Phaser.GameObjects.Image).x = (index - (this.queuedIconsContainer.length - 1) / 2) * 92.5 * this.scaleFactor;
             });
             
             // Hide the skill button in the HUD list
@@ -538,11 +554,11 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
                 skillBtn.setVisible(false);
             }
         } else {
-            const icon = this.add.image(0, 0, data.icon).setDisplaySize(28 * this.scaleFactor, 28 * this.scaleFactor);
+            const icon = this.add.image(0, 0, data.icon).setDisplaySize(37 * this.scaleFactor, 37 * this.scaleFactor);
             icon.setData('skillId', data.skillId);
             this.opponentQueuedIconsContainer.add(icon);
             this.opponentQueuedIconsContainer.getAll().forEach((child, index) => {
-                (child as Phaser.GameObjects.Image).x = (index - (this.opponentQueuedIconsContainer.length - 1) / 2) * 35 * this.scaleFactor;
+                (child as Phaser.GameObjects.Image).x = (index - (this.opponentQueuedIconsContainer.length - 1) / 2) * 46 * this.scaleFactor;
             });
         }
     });
@@ -557,7 +573,7 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
                 const skillId = icon.getData('skillId');
                 this.queuedIconsContainer.remove(icon, true);
                 this.queuedIconsContainer.getAll().forEach((child, index) => {
-                    (child as Phaser.GameObjects.Image).x = (index - (this.queuedIconsContainer.length - 1) / 2) * 70 * this.scaleFactor;
+                    (child as Phaser.GameObjects.Image).x = (index - (this.queuedIconsContainer.length - 1) / 2) * 92.5 * this.scaleFactor;
                 });
                 
                 // Show the skill button in the HUD list again
@@ -576,58 +592,67 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
             if (icon) {
                 this.opponentQueuedIconsContainer.remove(icon, true);
                 this.opponentQueuedIconsContainer.getAll().forEach((child, index) => {
-                    (child as Phaser.GameObjects.Image).x = (index - (this.opponentQueuedIconsContainer.length - 1) / 2) * 35 * this.scaleFactor;
+                    (child as Phaser.GameObjects.Image).x = (index - (this.opponentQueuedIconsContainer.length - 1) / 2) * 46 * this.scaleFactor;
                 });
             }
         }
     });
 
-    // --- Turn Count HUD (Top Middle-Right) ---
-    // Positioned between Opponent HUD (offsetX + 320) and Score HUD (width - offsetX - 160)
-    const turnHudX = offsetX + 330 * this.scaleFactor; 
-    const turnHudWidth = 60 * this.scaleFactor;
+    // --- Power HUD (Top Right) ---
+    const powerHudWidth = 240 * this.scaleFactor;
+    const powerHudHeight = 120 * this.scaleFactor;
+    const powerHudX = width - offsetX - powerHudWidth;
+    const powerHudY = 96 * this.scaleFactor;
+
+    this.powerHUD = this.add.container(powerHudX, powerHudY);
+    const powerBg = this.add.graphics();
+    powerBg.fillStyle(0x000000, 0.5);
+    powerBg.fillRoundedRect(0, 0, powerHudWidth, powerHudHeight, 24 * this.scaleFactor);
+    powerBg.lineStyle(2, 0xffffff, 0.1);
+    powerBg.strokeRoundedRect(0, 0, powerHudWidth, powerHudHeight, 24 * this.scaleFactor);
+    this.powerHUD.add(powerBg);
+
+    this.powerHUD.add(this.add.text(20 * this.scaleFactor, 22 * this.scaleFactor, 'POWER', {
+      fontFamily: 'monospace',
+      fontSize: `${Math.floor(18 * this.scaleFactor)}px`,
+      color: '#ffffff'
+    }).setAlpha(0.5));
+
+    this.powerText = this.add.text(20 * this.scaleFactor, 52 * this.scaleFactor, '0', {
+      fontFamily: 'monospace',
+      fontSize: `${Math.floor(36 * this.scaleFactor)}px`,
+      fontStyle: 'bold',
+      color: '#fbbf24'
+    });
+    this.powerHUD.add(this.powerText);
+
+    // --- Turn Count HUD (Top Right, left of Power HUD) ---
+    const turnHudWidth = 90 * this.scaleFactor;
+    const turnHudHeight = 120 * this.scaleFactor;
+    const turnHudX = powerHudX - 12 * this.scaleFactor - turnHudWidth;
+    const turnHudY = 96 * this.scaleFactor;
     
-    this.turnHUD = this.add.container(turnHudX, offsetY - 172 * this.scaleFactor);
+    this.turnHUD = this.add.container(turnHudX, turnHudY);
     const turnBg = this.add.graphics();
     turnBg.fillStyle(0x000000, 0.5);
-    turnBg.fillRoundedRect(0, 0, turnHudWidth, 80 * this.scaleFactor, 16 * this.scaleFactor);
+    turnBg.fillRoundedRect(0, 0, turnHudWidth, turnHudHeight, 24 * this.scaleFactor);
     turnBg.lineStyle(2, 0xffffff, 0.1);
-    turnBg.strokeRoundedRect(0, 0, turnHudWidth, 80 * this.scaleFactor, 16 * this.scaleFactor);
+    turnBg.strokeRoundedRect(0, 0, turnHudWidth, turnHudHeight, 24 * this.scaleFactor);
     this.turnHUD.add(turnBg);
 
-    this.turnHUD.add(this.add.text(turnHudWidth / 2, 15 * this.scaleFactor, 'TURNS', {
+    this.turnHUD.add(this.add.text(turnHudWidth / 2, 22 * this.scaleFactor, 'TURNS', {
       fontFamily: 'monospace',
-      fontSize: `${Math.floor(12 * this.scaleFactor)}px`,
+      fontSize: `${Math.floor(18 * this.scaleFactor)}px`,
       color: '#ffffff'
     }).setOrigin(0.5, 0).setAlpha(0.5));
 
-    this.turnCountText = this.add.text(turnHudWidth / 2, 35 * this.scaleFactor, '1', {
+    this.turnCountText = this.add.text(turnHudWidth / 2, 52 * this.scaleFactor, '1', {
       fontFamily: 'monospace',
-      fontSize: `${Math.floor(24 * this.scaleFactor)}px`,
+      fontSize: `${Math.floor(36 * this.scaleFactor)}px`,
       fontStyle: 'bold',
       color: '#3b82f6'
     }).setOrigin(0.5, 0);
     this.turnHUD.add(this.turnCountText);
-
-    // --- Power HUD (Top Right) ---
-    const powerBg = this.add.graphics();
-    powerBg.fillStyle(0x000000, 0.5);
-    powerBg.fillRoundedRect(width - offsetX - 160 * this.scaleFactor, offsetY - 172 * this.scaleFactor, 160 * this.scaleFactor, 80 * this.scaleFactor, 16 * this.scaleFactor);
-    powerBg.lineStyle(2, 0xffffff, 0.1);
-    powerBg.strokeRoundedRect(width - offsetX - 160 * this.scaleFactor, offsetY - 172 * this.scaleFactor, 160 * this.scaleFactor, 80 * this.scaleFactor, 16 * this.scaleFactor);
-
-    this.add.text(width - offsetX - 140 * this.scaleFactor, offsetY - 157 * this.scaleFactor, 'POWER', {
-      fontFamily: 'monospace',
-      fontSize: `${Math.floor(12 * this.scaleFactor)}px`,
-      color: '#ffffff'
-    }).setAlpha(0.5);
-
-    this.powerText = this.add.text(width - offsetX - 140 * this.scaleFactor, offsetY - 137 * this.scaleFactor, '0', {
-      fontFamily: 'monospace',
-      fontSize: `${Math.floor(24 * this.scaleFactor)}px`,
-      fontStyle: 'bold',
-      color: '#fbbf24'
-    });
 
     this.ActiveSkillButton();
     
@@ -636,9 +661,10 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
   }
 
   private ActiveSkillButton() {
-    const { width, height } = this.cameras.main;
-    const offsetX = (width - BASE_GRID_WIDTH) / 2;
-    const offsetY = (height - BASE_GRID_WIDTH) / 2;
+    const width = this.gameWidth;
+    const height = this.gameHeight;
+    const offsetX = this.getOffsetX();
+    const offsetY = this.getOffsetY();
     const gridWidth = BASE_GRID_WIDTH;
 
     const combat = CombatManager.getInstance();
@@ -648,9 +674,9 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
     const skillId = user.loadout.active;
     const skill = CombatRegistry.getInstance().getSkill(skillId);
     
-    const size = 120 * this.scaleFactor;
+    const size = 180 * this.scaleFactor;
     const x = width - offsetX - size/2;
-    const y = offsetY + gridWidth + 130 * this.scaleFactor; // Centered vertically with Player HUD (180px height)
+    const y = height - HUD_CONFIG.marginY - HUD_CONFIG.userHeight / 2; // Vertically centered with User HUD
 
     this.activeSkillBtn = this.add.container(x, y);
     
@@ -662,20 +688,20 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
     this.activeSkillBtn.add(bg);
 
     // Icon (placeholder or generic skill icon)
-    const icon = this.add.text(0, -10 * this.scaleFactor, '⚡', { fontSize: `${Math.floor(40 * this.scaleFactor)}px` }).setOrigin(0.5);
+    const icon = this.add.text(0, -15 * this.scaleFactor, '⚡', { fontSize: `${Math.floor(60 * this.scaleFactor)}px` }).setOrigin(0.5);
     this.activeSkillBtn.add(icon);
 
-    const label = this.add.text(0, 25 * this.scaleFactor, skill ? skill.name.toUpperCase() : 'SKILL', {
+    const label = this.add.text(0, 35 * this.scaleFactor, skill ? skill.name.toUpperCase() : 'SKILL', {
       fontFamily: 'monospace',
-      fontSize: `${Math.floor(14 * this.scaleFactor)}px`,
+      fontSize: `${Math.floor(20 * this.scaleFactor)}px`,
       fontStyle: 'bold',
       color: '#ffffff'
     }).setOrigin(0.5);
     this.activeSkillBtn.add(label);
 
-    const costText = this.add.text(0, 40 * this.scaleFactor, skill ? `${skill.chargeCost} EP` : '', {
+    const costText = this.add.text(0, 60 * this.scaleFactor, skill ? `${skill.chargeCost} EP` : '', {
       fontFamily: 'monospace',
-      fontSize: `${Math.floor(12 * this.scaleFactor)}px`,
+      fontSize: `${Math.floor(16 * this.scaleFactor)}px`,
       color: '#3b82f6'
     }).setOrigin(0.5);
     this.activeSkillBtn.add(costText);
@@ -736,8 +762,8 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
     const char = isUser ? combat.user : combat.opponent;
     if (!char) return;
 
-    const hudWidth = isUser ? 720 * this.scaleFactor : HUD_CONFIG.width;
-    const hudHeight = isUser ? 270 * this.scaleFactor : 180 * this.scaleFactor;
+    const hudWidth = isUser ? HUD_CONFIG.userWidth : HUD_CONFIG.opponentWidth;
+    const hudHeight = isUser ? HUD_CONFIG.userHeight : HUD_CONFIG.opponentHeight;
 
     // Glow
     const glow = this.add.graphics();
@@ -757,28 +783,28 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
 
     const nameText = this.add.text(15 * this.scaleFactor, 15 * this.scaleFactor, char.name.toUpperCase(), {
       fontFamily: 'monospace',
-      fontSize: `${Math.floor(16 * this.scaleFactor)}px`,
+      fontSize: `${Math.floor(24 * this.scaleFactor)}px`,
       fontStyle: 'bold',
       color: isUser ? '#34d399' : '#f87171'
     });
     container.add(nameText);
 
-    const classText = this.add.text(hudWidth - 15 * this.scaleFactor, 18 * this.scaleFactor, char.classType, {
+    const classText = this.add.text(hudWidth - 15 * this.scaleFactor, 15 * this.scaleFactor, char.classType, {
       fontFamily: 'monospace',
-      fontSize: `${Math.floor(10 * this.scaleFactor)}px`,
+      fontSize: `${Math.floor(22 * this.scaleFactor)}px`,
       color: '#ffffff'
     }).setOrigin(1, 0).setAlpha(0.5);
     container.add(classText);
 
     // Linked Gem Indicator
-    const gemIcon = this.add.image(hudWidth - 15 * this.scaleFactor, 35 * this.scaleFactor, `shape_${char.linkedGem}`).setScale(0.5 * this.scaleFactor).setOrigin(1, 0);
+    const gemIcon = this.add.image(hudWidth - 15 * this.scaleFactor, 45 * this.scaleFactor, `shape_${char.linkedGem}`).setScale(2.5 * this.scaleFactor).setOrigin(1, 0);
     container.add(gemIcon);
 
     // HP Bar
-    container.add(this.add.text(15 * this.scaleFactor, 45 * this.scaleFactor, 'HP', { fontSize: `${Math.floor(10 * this.scaleFactor)}px`, color: '#ffffff' }).setAlpha(0.7));
-    const barWidth = isUser ? 360 * this.scaleFactor : HUD_CONFIG.barWidth;
-    const hpValText = this.add.text(15 * this.scaleFactor + barWidth, 45 * this.scaleFactor, `${Math.floor(char.currentHp)}/${char.maxHp}`, { 
-      fontSize: `${Math.floor(10 * this.scaleFactor)}px`, 
+    container.add(this.add.text(15 * this.scaleFactor, 55 * this.scaleFactor, 'HP', { fontSize: `${Math.floor(15 * this.scaleFactor)}px`, color: '#ffffff' }).setAlpha(0.7));
+    const barWidth = isUser ? HUD_CONFIG.userBarWidth : HUD_CONFIG.opponentBarWidth;
+    const hpValText = this.add.text(15 * this.scaleFactor + barWidth, 55 * this.scaleFactor, `${Math.floor(char.currentHp)}/${char.maxHp}`, { 
+      fontSize: `${Math.floor(15 * this.scaleFactor)}px`, 
       fontFamily: 'monospace',
       color: '#ffffff' 
     }).setOrigin(1, 0).setAlpha(0.7);
@@ -788,12 +814,12 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
     const hpBar = this.add.graphics();
     container.add(hpBar);
     if (isUser) this.userHpBar = hpBar; else this.opponentHpBar = hpBar;
-    this.updateBar(hpBar, char.currentHp / char.maxHp, isUser ? HUD_CONFIG.colors.hp : HUD_CONFIG.colors.opponentHp, barWidth);
+    this.updateBar(hpBar, char.currentHp / char.maxHp, isUser ? HUD_CONFIG.colors.hp : HUD_CONFIG.colors.opponentHp, barWidth, 70 * this.scaleFactor);
 
     // Charge Bar
-    container.add(this.add.text(15 * this.scaleFactor, 85 * this.scaleFactor, 'CHARGE', { fontSize: `${Math.floor(10 * this.scaleFactor)}px`, color: '#ffffff' }).setAlpha(0.7));
-    const chargeValText = this.add.text(15 * this.scaleFactor + barWidth, 85 * this.scaleFactor, `${Math.floor(char.currentCharge)}/${char.maxCharge}`, { 
-      fontSize: `${Math.floor(10 * this.scaleFactor)}px`, 
+    container.add(this.add.text(15 * this.scaleFactor, 95 * this.scaleFactor, 'CHARGE', { fontSize: `${Math.floor(15 * this.scaleFactor)}px`, color: '#ffffff' }).setAlpha(0.7));
+    const chargeValText = this.add.text(15 * this.scaleFactor + barWidth, 95 * this.scaleFactor, `${Math.floor(char.currentCharge)}/${char.maxCharge}`, { 
+      fontSize: `${Math.floor(15 * this.scaleFactor)}px`, 
       fontFamily: 'monospace',
       color: '#ffffff' 
     }).setOrigin(1, 0).setAlpha(0.7);
@@ -803,20 +829,20 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
     const chargeBar = this.add.graphics();
     container.add(chargeBar);
     if (isUser) this.userChargeBar = chargeBar; else this.opponentChargeBar = chargeBar;
-    this.updateBar(chargeBar, char.currentCharge / char.maxCharge, isUser ? HUD_CONFIG.colors.charge : HUD_CONFIG.colors.opponentCharge, barWidth);
+    this.updateBar(chargeBar, char.currentCharge / char.maxCharge, isUser ? HUD_CONFIG.colors.charge : HUD_CONFIG.colors.opponentCharge, barWidth, 110 * this.scaleFactor);
 
     // Stats Display
-    const statsContainer = this.add.container(15 * this.scaleFactor, 115 * this.scaleFactor);
-    const statStyle = { fontSize: `${Math.floor(9 * this.scaleFactor)}px`, fontFamily: 'monospace', color: '#aaaaaa' };
-    const valStyle = { fontSize: `${Math.floor(9 * this.scaleFactor)}px`, fontFamily: 'monospace', color: '#ffffff', fontStyle: 'bold' };
+    const statsContainer = this.add.container(15 * this.scaleFactor, 145 * this.scaleFactor);
+    const statStyle = { fontSize: `${Math.floor(14 * this.scaleFactor)}px`, fontFamily: 'monospace', color: '#aaaaaa' };
+    const valStyle = { fontSize: `${Math.floor(14 * this.scaleFactor)}px`, fontFamily: 'monospace', color: '#ffffff', fontStyle: 'bold' };
     
     const stats = [
         { label: 'STR', val: char.stats.strength, x: 0, y: 0 },
-        { label: 'END', val: char.stats.endurance, x: 45 * this.scaleFactor, y: 0 },
-        { label: 'PWR', val: char.stats.power, x: 90 * this.scaleFactor, y: 0 },
-        { label: 'RES', val: char.stats.resistance, x: 135 * this.scaleFactor, y: 0 },
-        { label: 'SPD', val: char.stats.speed, x: 180 * this.scaleFactor, y: 0 },
-        { label: 'ACC', val: char.stats.accuracy, x: 225 * this.scaleFactor, y: 0 },
+        { label: 'END', val: char.stats.endurance, x: 68 * this.scaleFactor, y: 0 },
+        { label: 'PWR', val: char.stats.power, x: 135 * this.scaleFactor, y: 0 },
+        { label: 'RES', val: char.stats.resistance, x: 202 * this.scaleFactor, y: 0 },
+        { label: 'SPD', val: char.stats.speed, x: 270 * this.scaleFactor, y: 0 },
+        { label: 'ACC', val: char.stats.accuracy, x: 338 * this.scaleFactor, y: 0 },
     ];
 
     stats.forEach(s => {
@@ -827,6 +853,7 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
 
     // Skills (User only for now)
     if (isUser) {
+      const skillY = 190 * this.scaleFactor;
       const stackSkills = char.loadout.stacks || [];
       const equippedSkills = [...stackSkills];
       const numSkills = equippedSkills.length;
@@ -851,18 +878,18 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
           // Masking for overflow
           // We use world coordinates for the geometry mask
           const worldX = container.x + padding;
-          const worldY = container.y + 135 * this.scaleFactor; // Adjusted Y position for skills
+          const worldY = container.y + skillY;
           
           const maskShape = this.make.graphics({ x: 0, y: 0 });
           maskShape.fillStyle(0xffffff);
-          maskShape.fillRoundedRect(worldX, worldY, availableWidth, 50 * this.scaleFactor, 8 * this.scaleFactor);
+          maskShape.fillRoundedRect(worldX, worldY, availableWidth, 60 * this.scaleFactor, 8 * this.scaleFactor);
           const mask = maskShape.createGeometryMask();
           skillListContainer.setMask(mask);
           
           skillListContainer.x = padding;
 
           // Make container draggable for scrolling
-          const scrollHitArea = new Phaser.Geom.Rectangle(0, 135 * this.scaleFactor, totalWidth, 50 * this.scaleFactor);
+          const scrollHitArea = new Phaser.Geom.Rectangle(0, skillY, totalWidth, 60 * this.scaleFactor);
           skillListContainer.setInteractive(scrollHitArea, Phaser.Geom.Rectangle.Contains);
           this.input.setDraggable(skillListContainer);
           
@@ -877,7 +904,7 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
         }
 
         equippedSkills.forEach((skillId, i) => {
-          const skillBtn = this.add.container(i * (btnWidth + spacing), 135 * this.scaleFactor); // Adjusted Y position for skills
+          const skillBtn = this.add.container(i * (btnWidth + spacing), skillY);
           skillBtn.setData('skillId', skillId);
           const btnBg = this.add.graphics();
           btnBg.fillStyle(0xffffff, 0.1);
@@ -972,21 +999,16 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
     }
   }
 
-  private updateBar(graphics: Phaser.GameObjects.Graphics, percent: number, color: number, customWidth?: number) {
+  private updateBar(graphics: Phaser.GameObjects.Graphics, percent: number, color: number, width: number, y: number) {
     graphics.clear();
-    const barWidth = customWidth || HUD_CONFIG.barWidth;
     // Background
     graphics.fillStyle(0x000000, 0.5);
-    graphics.fillRoundedRect(15 * this.scaleFactor, 60 * this.scaleFactor, barWidth, HUD_CONFIG.barHeight, 7 * this.scaleFactor);
-    if (graphics === this.userChargeBar || graphics === this.opponentChargeBar) {
-        graphics.fillRoundedRect(15 * this.scaleFactor, 100 * this.scaleFactor, barWidth, HUD_CONFIG.barHeight, 7 * this.scaleFactor);
-    }
+    graphics.fillRoundedRect(15 * this.scaleFactor, y, width, HUD_CONFIG.barHeight * this.scaleFactor, 7 * this.scaleFactor);
 
     // Fill
     graphics.fillStyle(color, 1);
-    const y = (graphics === this.userHpBar || graphics === this.opponentHpBar) ? 60 * this.scaleFactor : 100 * this.scaleFactor;
     if (percent > 0) {
-        graphics.fillRoundedRect(15 * this.scaleFactor, y, barWidth * percent, HUD_CONFIG.barHeight, 7 * this.scaleFactor);
+        graphics.fillRoundedRect(15 * this.scaleFactor, y, width * percent, HUD_CONFIG.barHeight * this.scaleFactor, 7 * this.scaleFactor);
     }
   }
 
@@ -1005,7 +1027,8 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
     this.isGameOver = true;
     this.isProcessing = true; // Block further input
     const isUserWinner = data.winner === 'USER';
-    const { width, height } = this.cameras.main;
+    const width = this.gameWidth;
+    const height = this.gameHeight;
 
     // Overlay
     const overlay = this.add.rectangle(0, 0, width, height, 0x000000, 0.7).setOrigin(0);
@@ -1067,7 +1090,8 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
 
   private handleSkillMissed = (data: { skill: any, character: string }) => {
     const isUser = data.character === 'USER';
-    const { width, height } = this.cameras.main;
+    const width = this.gameWidth;
+    const height = this.gameHeight;
     const x = width / 2;
     const y = isUser ? height - 200 * this.scaleFactor : 200 * this.scaleFactor;
 
@@ -1093,7 +1117,8 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
 
   private handleSkillExecuted = (data: { skill: any, character: string }) => {
     const isUser = data.character === 'USER';
-    const { width, height } = this.cameras.main;
+    const width = this.gameWidth;
+    const height = this.gameHeight;
     const x = width / 2;
     const y = isUser ? height - 200 * this.scaleFactor : 200 * this.scaleFactor;
 
@@ -1172,8 +1197,8 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
     const bar = isUser ? this.userHpBar : this.opponentHpBar;
     const text = isUser ? this.userHpText : this.opponentHpText;
     const color = isUser ? HUD_CONFIG.colors.hp : HUD_CONFIG.colors.opponentHp;
-    const barWidth = isUser ? 360 * this.scaleFactor : HUD_CONFIG.barWidth;
-    this.updateBar(bar, data.hp / data.maxHp, color, barWidth);
+    const width = isUser ? HUD_CONFIG.userBarWidth : HUD_CONFIG.opponentBarWidth;
+    this.updateBar(bar, data.hp / data.maxHp, color, width, 70 * this.scaleFactor);
     if (text) {
       text.setText(`${Math.floor(data.hp)}/${data.maxHp}`);
     }
@@ -1184,8 +1209,8 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
     const bar = isUser ? this.userChargeBar : this.opponentChargeBar;
     const text = isUser ? this.userChargeText : this.opponentChargeText;
     const color = isUser ? HUD_CONFIG.colors.charge : HUD_CONFIG.colors.opponentCharge;
-    const barWidth = isUser ? 360 * this.scaleFactor : HUD_CONFIG.barWidth;
-    this.updateBar(bar, data.charge / data.maxCharge, color, barWidth);
+    const width = isUser ? HUD_CONFIG.userBarWidth : HUD_CONFIG.opponentBarWidth;
+    this.updateBar(bar, data.charge / data.maxCharge, color, width, 110 * this.scaleFactor);
     if (text) {
       text.setText(`${Math.floor(data.charge)}/${data.maxCharge}`);
     }
@@ -1351,11 +1376,11 @@ export class Game_Scene extends Phaser.Scene implements IEffectDelegate {
   }
 
   private getOffsetX() {
-    return (this.cameras.main.width - GRID_SIZE * CELL_SIZE) / 2;
+    return this.getCenteredX(GRID_SIZE * CELL_SIZE);
   }
 
   private getOffsetY() {
-    return (this.cameras.main.height - GRID_SIZE * CELL_SIZE) / 2;
+    return this.getCenteredY(GRID_SIZE * CELL_SIZE, -77 * this.scaleFactor);
   }
 
   private setSpecial(r: number, c: number, type: SpecialType) {

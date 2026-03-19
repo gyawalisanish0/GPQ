@@ -1,0 +1,40 @@
+{
+  "id": "dummy4",
+  "name": "Dummy 4",
+  "classType": "DUMMY",
+  "damageType": "PHYSICAL",
+  "maxHp": 1000,
+  "initialHp": 1000,
+  "maxCharge": 100,
+  "initialCharge": 0,
+  "stats": {
+    "strength": 10,
+    "endurance": 10,
+    "power": 10,
+    "resistance": 10,
+    "speed": 10,
+    "accuracy": 100
+  },
+  "portrait": "portrait_warrior",
+  "unlockedSkills": [
+    "dummy4_passive",
+    "dummy4_active1",
+    "dummy4_active2",
+    "dummy4_active3",
+    "dummy4_active4",
+    "dummy4_stack1",
+    "dummy4_stack2",
+    "dummy4_stack3",
+    "dummy4_stack4",
+    "dummy4_stack5"
+  ],
+  "loadout": {
+    "passive": "dummy4_passive",
+    "active": "dummy4_active1",
+    "stacks": [
+      "dummy4_stack1",
+      "dummy4_stack2",
+      "dummy4_stack3"
+    ]
+  }
+}
