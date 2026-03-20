@@ -88,6 +88,9 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
   private gridOffX  = 0;
   private gridOffY  = 0;
 
+  /** Scale-aware font/size helper: floor(n * scaleFactor). */
+  private fs(n: number): number { return Math.floor(n * this.scaleFactor); }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // Lifecycle
   // ═══════════════════════════════════════════════════════════════════════════
@@ -367,6 +370,20 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
     const cm = CombatManager.getInstance();
     const user = cm.user!, opp = cm.opponent!;
 
+    // Shared layout constants — defined ONCE and reused in both strips so
+    // spacing is pixel-perfect identical between opponent and player HUDs.
+    const pad  = Math.floor(14 * sf);   // left/top inset for name/label text
+    const barH = Math.floor(14 * sf);   // height of every progress bar
+    const barX = Math.floor(W * 0.30);  // left edge of all bars
+    const barW = Math.floor(W * 0.52);  // width of all bars (ends at ~82 % of W)
+    // Row-advance: label-text height + bar height + gap below bar
+    const rowAdv = this.fs(14) + barH + Math.floor(6 * sf);
+
+    // FIX: use a fixed display size for gem icons so the size is consistent
+    // across all screen sizes.  setScale(1.8*sf) on a CELL_SIZE-pixel texture
+    // produces icons ranging from 24 px on phones to 185 px on desktop.
+    const gemIconSz = Math.floor(38 * sf);
+
     // ── TOP STRIP (Opponent) ──────────────────────────────────────────────────
     this.topHUD = this.add.container(0, 0);
     const topBg = this.add.graphics();
@@ -376,53 +393,59 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
     topBg.lineBetween(0, this.topHudH, W, this.topHudH);
     this.topHUD.add(topBg);
 
-    // Opponent glow
     this.oppGlow = this.add.graphics(); this.oppGlow.setAlpha(0);
     this.topHUD.add(this.oppGlow);
 
-    const pad = Math.floor(14 * sf);
-    const barW = Math.floor(W * 0.52);
-    const barH = Math.floor(14 * sf);
-    const barX = Math.floor(W * 0.30);
-
-    // Opponent name
+    // Opponent name + class (left side)
     this.topHUD.add(this.add.text(pad, pad, opp.name.toUpperCase(), {
       fontFamily: 'monospace', fontSize: `${this.fs(22)}px`,
       fontStyle: 'bold', color: '#f87171'
     }));
-    // Class
     this.topHUD.add(this.add.text(pad, pad + this.fs(26), opp.classType, {
       fontFamily: 'monospace', fontSize: `${this.fs(14)}px`, color: '#888'
     }));
-    // Linked gem icon
+
+    // FIX: gem icon — setDisplaySize for consistent HUD icon size.
+    // FIX: gem Y — vertically centre in the top strip (topHudH/2) to match
+    //             the visual weight of the bars on the right.
     this.topHUD.add(
-      this.add.image(Math.floor(W * 0.25), Math.floor(this.topHudH/2), `shape_${opp.linkedGem}`)
-        .setScale(1.8 * sf).setOrigin(0.5)
+      this.add.image(Math.floor(W * 0.24), Math.floor(this.topHudH / 2), `shape_${opp.linkedGem}`)
+        .setDisplaySize(gemIconSz, gemIconSz).setOrigin(0.5)
     );
 
-    // HP bar
+    // Opponent HP bar
     const oppHpGfx = this.add.graphics();
-    this.topHUD.add(this.add.text(barX, pad, 'HP', { fontFamily:'monospace', fontSize:`${this.fs(12)}px`, color:'#aaa' }));
-    this.oppHpTxt = this.add.text(barX + barW, pad, `${opp.currentHp}/${opp.maxHp}`,
+    const oppHpLabelY = pad;
+    const oppHpBarY   = oppHpLabelY + this.fs(14);   // label height → bar starts here
+    this.topHUD.add(this.add.text(barX, oppHpLabelY, 'HP',
+      { fontFamily:'monospace', fontSize:`${this.fs(12)}px`, color:'#aaa' }));
+    this.oppHpTxt = this.add.text(barX + barW, oppHpLabelY, `${opp.currentHp}/${opp.maxHp}`,
       { fontFamily:'monospace', fontSize:`${this.fs(12)}px`, color:'#ccc' }).setOrigin(1, 0);
     this.topHUD.add([oppHpGfx, this.oppHpTxt]);
-    this.bars.oppHp = { gfx: oppHpGfx, pct: -1, color: 0xef4444, w: barW, y: pad + this.fs(14) };
+    // FIX: store barY consistently derived from oppHpLabelY (no magic offset)
+    this.bars.oppHp = { gfx: oppHpGfx, pct: -1, color: 0xef4444, w: barW, y: oppHpBarY };
 
-    // Charge bar
+    // Opponent Charge bar
     const oppChGfx = this.add.graphics();
-    const cY = pad + this.fs(14) + barH + Math.floor(6*sf);
-    this.topHUD.add(this.add.text(barX, cY - Math.floor(2*sf), 'CHARGE', { fontFamily:'monospace', fontSize:`${this.fs(12)}px`, color:'#aaa' }));
-    this.oppChTxt = this.add.text(barX + barW, cY - Math.floor(2*sf), `${opp.currentCharge}/${opp.maxCharge}`,
+    // FIX: use rowAdv (= fs(14)+barH+6sf) for both HUDs — previously opponent
+    //      used barH (14sf) but player used 16sf, producing different row heights.
+    const oppChLabelY = oppHpLabelY + rowAdv;
+    const oppChBarY   = oppChLabelY + this.fs(14);
+    // FIX: removed the inconsistent -2sf offset on charge labels
+    this.topHUD.add(this.add.text(barX, oppChLabelY, 'CHARGE',
+      { fontFamily:'monospace', fontSize:`${this.fs(12)}px`, color:'#aaa' }));
+    this.oppChTxt = this.add.text(barX + barW, oppChLabelY, `${opp.currentCharge}/${opp.maxCharge}`,
       { fontFamily:'monospace', fontSize:`${this.fs(12)}px`, color:'#ccc' }).setOrigin(1, 0);
     this.topHUD.add([oppChGfx, this.oppChTxt]);
-    this.bars.oppCharge = { gfx: oppChGfx, pct: -1, color: 0xeab308, w: barW, y: cY + Math.floor(14*sf) };
+    this.bars.oppCharge = { gfx: oppChGfx, pct: -1, color: 0xeab308, w: barW, y: oppChBarY };
 
-    // Force initial draw
-    this.redrawBar('oppHp',     opp.currentHp     / opp.maxHp,     barX, sf);
-    this.redrawBar('oppCharge', opp.currentCharge  / opp.maxCharge, barX, sf);
+    this.redrawBar('oppHp',     opp.currentHp    / opp.maxHp,    barX, sf);
+    this.redrawBar('oppCharge', opp.currentCharge / opp.maxCharge, barX, sf);
 
-    // Opponent queued skill icons
-    this.oppQueuedIcons = this.add.container(W - Math.floor(40*sf), Math.floor(this.topHudH/2));
+    // Opponent queued icons — anchor at right-side with enough room for icons
+    // FIX: moved anchor left so icons don't bleed past the screen edge when
+    //      multiple skills are queued (each icon ~22sf wide + spacing)
+    this.oppQueuedIcons = this.add.container(W - Math.floor(70 * sf), Math.floor(this.topHudH / 2));
     this.topHUD.add(this.oppQueuedIcons);
 
     // ── BOTTOM STRIP (Player) ─────────────────────────────────────────────────
@@ -439,46 +462,62 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
     this.userGlow = this.add.graphics(); this.userGlow.setAlpha(0);
     this.bottomHUD.add(this.userGlow);
 
-    const uPad = Math.floor(12 * sf);
-    const uBarW = Math.floor(W * 0.52);
-    const uBarX = Math.floor(W * 0.30);
-
-    // Player name
-    this.bottomHUD.add(this.add.text(uPad, uPad, user.name.toUpperCase(), {
+    // Player name + class (left side)
+    this.bottomHUD.add(this.add.text(pad, pad, user.name.toUpperCase(), {
       fontFamily: 'monospace', fontSize: `${this.fs(22)}px`,
       fontStyle: 'bold', color: '#34d399'
     }));
-    this.bottomHUD.add(this.add.text(uPad, uPad + this.fs(26), user.classType, {
+    this.bottomHUD.add(this.add.text(pad, pad + this.fs(26), user.classType, {
       fontFamily: 'monospace', fontSize: `${this.fs(14)}px`, color: '#888'
     }));
+
+    // FIX: gem icon — setDisplaySize; Y centred on the info-area (name+bars)
+    //      which spans ~0 to rowAdv*2+barH ≈ 76sf → centre ≈ 38sf.
+    //      Previously used uPad + fs(22)/2 ≈ 23sf (near top), while the
+    //      opponent gem was at topHudH/2 (properly centred).
+    const gemInfoCentreY = Math.floor((pad * 2 + rowAdv * 2 + barH) / 2);
     this.bottomHUD.add(
-      this.add.image(Math.floor(W * 0.25), Math.floor(uPad + this.fs(22)/2), `shape_${user.linkedGem}`)
-        .setScale(1.8 * sf).setOrigin(0.5)
+      this.add.image(Math.floor(W * 0.24), gemInfoCentreY, `shape_${user.linkedGem}`)
+        .setDisplaySize(gemIconSz, gemIconSz).setOrigin(0.5)
     );
 
+    // Player HP bar — same Y formula as opponent strip
     const userHpGfx = this.add.graphics();
-    this.bottomHUD.add(this.add.text(uBarX, uPad, 'HP', { fontFamily:'monospace', fontSize:`${this.fs(12)}px`, color:'#aaa' }));
-    this.userHpTxt = this.add.text(uBarX + uBarW, uPad, `${user.currentHp}/${user.maxHp}`,
+    const userHpLabelY = pad;
+    const userHpBarY   = userHpLabelY + this.fs(14);
+    this.bottomHUD.add(this.add.text(barX, userHpLabelY, 'HP',
+      { fontFamily:'monospace', fontSize:`${this.fs(12)}px`, color:'#aaa' }));
+    this.userHpTxt = this.add.text(barX + barW, userHpLabelY, `${user.currentHp}/${user.maxHp}`,
       { fontFamily:'monospace', fontSize:`${this.fs(12)}px`, color:'#ccc' }).setOrigin(1, 0);
     this.bottomHUD.add([userHpGfx, this.userHpTxt]);
-    this.bars.userHp = { gfx: userHpGfx, pct: -1, color: 0x10b981, w: uBarW, y: uPad + this.fs(14) };
+    this.bars.userHp = { gfx: userHpGfx, pct: -1, color: 0x10b981, w: barW, y: userHpBarY };
 
+    // Player Charge bar — FIX: use same rowAdv as opponent (was 16sf, now barH+fs14+6sf)
     const userChGfx = this.add.graphics();
-    const ucY = uPad + this.fs(14) + Math.floor(16*sf) + Math.floor(6*sf);
-    this.bottomHUD.add(this.add.text(uBarX, ucY - Math.floor(2*sf), 'CHARGE', { fontFamily:'monospace', fontSize:`${this.fs(12)}px`, color:'#aaa' }));
-    this.userChTxt = this.add.text(uBarX + uBarW, ucY - Math.floor(2*sf), `${user.currentCharge}/${user.maxCharge}`,
+    const userChLabelY = userHpLabelY + rowAdv;
+    const userChBarY   = userChLabelY + this.fs(14);
+    // FIX: removed -2sf offset (was inconsistent with HP label)
+    this.bottomHUD.add(this.add.text(barX, userChLabelY, 'CHARGE',
+      { fontFamily:'monospace', fontSize:`${this.fs(12)}px`, color:'#aaa' }));
+    this.userChTxt = this.add.text(barX + barW, userChLabelY, `${user.currentCharge}/${user.maxCharge}`,
       { fontFamily:'monospace', fontSize:`${this.fs(12)}px`, color:'#ccc' }).setOrigin(1, 0);
     this.bottomHUD.add([userChGfx, this.userChTxt]);
-    this.bars.userCharge = { gfx: userChGfx, pct: -1, color: 0x3b82f6, w: uBarW, y: ucY + Math.floor(14*sf) };
+    this.bars.userCharge = { gfx: userChGfx, pct: -1, color: 0x3b82f6, w: barW, y: userChBarY };
 
-    this.redrawBar('userHp',     user.currentHp    / user.maxHp,    uBarX, sf);
-    this.redrawBar('userCharge', user.currentCharge / user.maxCharge, uBarX, sf);
+    this.redrawBar('userHp',     user.currentHp    / user.maxHp,    barX, sf);
+    this.redrawBar('userCharge', user.currentCharge / user.maxCharge, barX, sf);
 
     // Stack skill buttons (bottom strip, right side)
     this.buildSkillButtons(user, sf);
 
-    // Player queued icons
-    this.queuedIcons = this.add.container(Math.floor(W/2), Math.floor(this.botHudH - 16*sf));
+    // FIX: player queued icons — was at botHudH-16sf (≈194sf) which sat directly
+    //      on top of the skill buttons at ≈168–200sf.  Place them in the gap
+    //      between the charge bar bottom and the skill buttons.
+    const btnH       = Math.floor(32 * sf);
+    const btnsTop    = this.botHudH - btnH - Math.floor(10 * sf);  // ≈ 168sf
+    const barsBottom = userChBarY + barH;                           // ≈ 76sf
+    const queuedY    = Math.floor((barsBottom + btnsTop) / 2);      // midpoint
+    this.queuedIcons = this.add.container(Math.floor(W / 2), queuedY);
     this.bottomHUD.add(this.queuedIcons);
 
     // ── MID overlay: Power + Turn (top-right corner) ──────────────────────────
@@ -643,7 +682,7 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
     const p = Math.max(0, Math.min(1, pct));
     if (Math.abs(p - b.pct) < 0.002) return;   // no visible change
     b.pct = p;
-    const bH = Math.floor(13 * sf);
+    const bH = Math.floor(14 * sf); // FIX: match layout barH constant (was 13sf)
     const r  = Math.floor(5 * sf);
     b.gfx.clear();
     b.gfx.fillStyle(0x000000, 0.45);
