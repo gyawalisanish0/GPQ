@@ -2,12 +2,79 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!-- ── Viewport / Mobile ─────────────────────────────────────────────── -->
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1.0, maximum-scale=1.0,
+                   minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+
+    <!-- Prevent iOS tap highlight & callouts -->
+    <meta name="apple-mobile-web-app-capable"          content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="mobile-web-app-capable"                content="yes" />
+    <meta name="theme-color"                           content="#0a0a0a" />
+
+    <!-- Prevent IE / Edge compat mode -->
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+
+    <!-- ── Favicons ──────────────────────────────────────────────────────── -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
     <title>Genesis Puzzle Quest</title>
+
+    <!-- ── Inline critical CSS (prevents FOUC before stylesheet loads) ───── -->
+    <style>
+      /* Hard reset — no scroll, no overscroll bounce, full coverage */
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+      html {
+        height: 100%;
+        height: -webkit-fill-available;   /* iOS 15 safe-area trick          */
+        overflow: hidden;
+        overscroll-behavior: none;
+        -webkit-text-size-adjust: 100%;   /* Prevent iOS font-size inflation  */
+        touch-action: none;               /* Handled in JS per-element        */
+      }
+
+      body {
+        height: 100%;
+        height: -webkit-fill-available;
+        overflow: hidden;
+        overscroll-behavior: none;
+        background: #0a0a0a;
+        /* Respect notch / dynamic island on all sides */
+        padding-top:    env(safe-area-inset-top);
+        padding-right:  env(safe-area-inset-right);
+        padding-bottom: env(safe-area-inset-bottom);
+        padding-left:   env(safe-area-inset-left);
+      }
+
+      #root {
+        width:    100%;
+        height:   100%;
+        overflow: hidden;
+        position: relative;
+      }
+
+      /* Phaser canvas — pixel-perfect, no blurry stretching in Safari */
+      canvas {
+        display:          block;
+        image-rendering:  pixelated;
+        image-rendering:  crisp-edges;   /* Firefox */
+        -ms-interpolation-mode: nearest-neighbor;
+        touch-action:     none;
+        user-select:      none;
+        -webkit-user-select: none;
+        outline:          none;
+        /* Let Phaser own the size; never let the browser scroll it */
+        position:         absolute;
+        top:    0;
+        left:   0;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-
