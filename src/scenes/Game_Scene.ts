@@ -1,1179 +1,1459 @@
 import Phaser from 'phaser';
-import { SwipeHandler }                            from '../engine/SwipeHandler';
+import { SwipeHandler } from '../engine/SwipeHandler';
 import { GameLogic, ShapeType, SpecialType, LogicCell, MatchResult } from '../engine/GameLogic';
-import { EffectManager, IEffectDelegate }          from '../engine/EffectManager';
-import { CombatRegistry }                          from '../engine/CombatRegistry';
-import { CombatManager }                           from '../engine/CombatManager';
-import { OpponentAI }                              from '../engine/OpponentAI';
-import { GemRegistry }                             from '../engine/GemRegistry';
-import { SoundManager, SoundType }                 from '../engine/SoundManager';
-import { BaseScene }                               from './BaseScene';
+import { EffectManager, IEffectDelegate } from '../engine/EffectManager';
+import { CombatRegistry } from '../engine/CombatRegistry';
+import { CombatManager } from '../engine/CombatManager';
+import { Character } from '../entities/Character';
+import { OpponentAI } from '../engine/OpponentAI';
+import { GemRegistry } from '../engine/GemRegistry';
+import { SoundManager, SoundType } from '../engine/SoundManager';
+import { BaseScene } from './BaseScene';
+import { GlobalInputManager } from '../engine/GlobalInputManager';
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-const GRID_SIZE = 10;
+let GRID_SIZE = 10;
+let CELL_SIZE = 88;
+let BASE_GRID_WIDTH = 880;
 
-// Computed in onInit() from screen dimensions
-let CELL_SIZE   = 80;
-let GRID_PX     = 800;
+// HUD Parameters
+let HUD_CONFIG = {
+  userWidth: 720,
+  opponentWidth: 480,
+  userHeight: 270,
+  opponentHeight: 180,
+  userBarWidth: 608,
+  opponentBarWidth: 372,
+  padding: 20,
+  barHeight: 21,
+  skillSize: 128,
+  marginX: 24,
+  marginY: 96,
+  colors: {
+    hp: 0x10b981,
+    charge: 0x3b82f6,
+    opponentHp: 0xef4444,
+    opponentCharge: 0xeab308,
+    bg: 0x000000,
+    border: 0xffffff
+  }
+};
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-interface VisualCell { sprite: Phaser.GameObjects.Container }
-
-interface BarState {
-  gfx:   Phaser.GameObjects.Graphics;
-  pct:   number;    // last drawn value
-  color: number;
-  w:     number;
-  y:     number;    // local y inside container
+interface VisualCell {
+  sprite: Phaser.GameObjects.Container;
 }
 
-// Tiny reusable floating-score text
-interface PooledText {
-  obj:  Phaser.GameObjects.Text;
-  free: boolean;
-}
-
-// ─── Game Scene ───────────────────────────────────────────────────────────────
 export class Game_Scene extends BaseScene implements IEffectDelegate {
-  constructor() { super('Game_Scene'); }
-
-  // Core
-  private logic!:         GameLogic;
-  private visualGrid:     (VisualCell | null)[][] = [];
-  private isProcessing  = false;
-  private isGameOver    = false;
-  private powerSurge    = 0;
-  private colors: Record<ShapeType, number> = {} as Record<ShapeType, number>;
-
-  // Input
-  private swipeHandler!:  SwipeHandler;
+  constructor() {
+    super('Game_Scene');
+  }
+  private logic!: GameLogic;
+  private visualGrid: (VisualCell | null)[][] = [];
+  private isProcessing = false;
+  private isGameOver = false;
+  private powerSurge = 0;
   private selectionRect!: Phaser.GameObjects.Rectangle;
-
-  // Effects
+  private swipeHandler!: SwipeHandler;
   private effectManager!: EffectManager;
-  private pendingSpecials: LogicCell[] = [];
+  private colors: Record<ShapeType, number> = {} as any;
 
-  // HUD containers
-  private topHUD!:    Phaser.GameObjects.Container;   // Opponent strip
-  private bottomHUD!: Phaser.GameObjects.Container;   // Player strip
-  private midHUD!:    Phaser.GameObjects.Container;   // Power / Turn (top-right)
-
-  // Cached bar states — only redrawn on dirty
-  private bars: Record<'userHp'|'userCharge'|'oppHp'|'oppCharge', BarState> = {} as any;
-
-  // Cached text refs
-  private userHpTxt!:   Phaser.GameObjects.Text;
-  private userChTxt!:   Phaser.GameObjects.Text;
-  private oppHpTxt!:    Phaser.GameObjects.Text;
-  private oppChTxt!:    Phaser.GameObjects.Text;
-  private powerTxt!:    Phaser.GameObjects.Text;
-  private turnTxt!:     Phaser.GameObjects.Text;
-  private userGlow!:    Phaser.GameObjects.Graphics;
-  private oppGlow!:     Phaser.GameObjects.Graphics;
+  // HUD Elements
+  private userHUD!: Phaser.GameObjects.Container;
+  private opponentHUD!: Phaser.GameObjects.Container;
+  private powerText!: Phaser.GameObjects.Text;
+  private userHpBar!: Phaser.GameObjects.Graphics;
+  private userChargeBar!: Phaser.GameObjects.Graphics;
+  private opponentHpBar!: Phaser.GameObjects.Graphics;
+  private opponentChargeBar!: Phaser.GameObjects.Graphics;
+  private userHpText!: Phaser.GameObjects.Text;
+  private userChargeText!: Phaser.GameObjects.Text;
+  private opponentHpText!: Phaser.GameObjects.Text;
+  private opponentChargeText!: Phaser.GameObjects.Text;
   private skillButtons: Phaser.GameObjects.Container[] = [];
-  private activeSkillBtn!: Phaser.GameObjects.Container;
-  private queuedIcons!:    Phaser.GameObjects.Container;
-  private oppQueuedIcons!: Phaser.GameObjects.Container;
-
-  // Floating text pool (avoid allocating per-match)
-  private textPool: PooledText[] = [];
-  private readonly POOL_SIZE = 24;
-
-  // AI
   private opponentAI: OpponentAI | null = null;
-
-  // ── Layout helpers ──────────────────────────────────────────────────────────
-  private topHudH   = 0;  // physical pixels — set in onInit
-  private botHudH   = 0;
-  private gridOffX  = 0;
-  private gridOffY  = 0;
-
-  /** Scale-aware font/size helper: floor(n * scaleFactor). */
-  private fs(n: number): number { return Math.floor(n * this.scaleFactor); }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Lifecycle
-  // ═══════════════════════════════════════════════════════════════════════════
+  private userGlow!: Phaser.GameObjects.Graphics;
+  private opponentGlow!: Phaser.GameObjects.Graphics;
+  private turnHUD!: Phaser.GameObjects.Container;
+  private powerHUD!: Phaser.GameObjects.Container;
+  private turnCountText!: Phaser.GameObjects.Text;
+  private activeSkillBtn!: Phaser.GameObjects.Container;
+  private queuedIconsContainer!: Phaser.GameObjects.Container;
+  private opponentQueuedIconsContainer!: Phaser.GameObjects.Container;
 
   protected onInit() {
     this.isGameOver = false;
-    this.skillButtons = [];
+    this.isProcessing = false;
 
-    const sf = this.scaleFactor;
+    CELL_SIZE = Math.floor(88 * this.scaleFactor);
+    BASE_GRID_WIDTH = CELL_SIZE * GRID_SIZE;
 
-    // Top HUD: compact opponent strip
-    this.topHudH = Math.floor(150 * sf);
-    // Bottom HUD: player strip with skills
-    this.botHudH = Math.floor(210 * sf);
+    HUD_CONFIG = {
+      ...HUD_CONFIG,
+      userWidth: Math.floor(720 * this.scaleFactor),
+      opponentWidth: Math.floor(480 * this.scaleFactor),
+      userHeight: Math.floor(270 * this.scaleFactor),
+      opponentHeight: Math.floor(180 * this.scaleFactor),
+      userBarWidth: Math.floor(608 * this.scaleFactor),
+      opponentBarWidth: Math.floor(372 * this.scaleFactor),
+      padding: Math.floor(20 * this.scaleFactor),
+      barHeight: Math.floor(21 * this.scaleFactor),
+      skillSize: Math.floor(128 * this.scaleFactor),
+      marginX: Math.floor(24 * this.scaleFactor),
+      marginY: Math.floor(96 * this.scaleFactor)
+    };
 
-    // Cell size: fill available WIDTH, but also constrain by available HEIGHT
-    const availW = this.gameWidth  * 0.96;
-    const availH = this.gameHeight - this.topHudH - this.botHudH - Math.floor(16 * sf);
-    CELL_SIZE = Math.floor(Math.min(availW, availH) / GRID_SIZE);
-    CELL_SIZE = Math.max(32, Math.min(CELL_SIZE, 120));   // clamp 32–120
-    GRID_PX   = CELL_SIZE * GRID_SIZE;
+    const registry = GemRegistry.getInstance();
+    const normalGems = registry.getAllGems().filter(g => g.type === 'normal');
 
-    this.gridOffX = Math.floor((this.gameWidth - GRID_PX) / 2);
-    this.gridOffY = this.topHudH + Math.floor((availH - GRID_PX) / 2) + Math.floor(8 * sf);
-
-    // Load gem colours
-    const reg = GemRegistry.getInstance();
-    reg.getAllGems().filter(g => g.type === 'normal').forEach(g => {
-      if (g.shape && g.color) {
-        const st = ShapeType[g.shape as keyof typeof ShapeType];
-        if (st) this.colors[st] = parseInt(g.color.replace('0x', ''), 16);
+    normalGems.forEach(gem => {
+      if (gem.shape && gem.color) {
+        const shapeType = ShapeType[gem.shape as keyof typeof ShapeType];
+        this.colors[shapeType] = parseInt(gem.color.replace('0x', ''), 16);
       }
     });
-    if (!Object.keys(this.colors).length) {
-      Object.assign(this.colors, {
-        [ShapeType.TRIANGLE]: 0x3b82f6, [ShapeType.SQUARE]:  0x22c55e,
-        [ShapeType.PENTAGON]: 0xec4899, [ShapeType.HEXAGON]: 0xeab308,
-        [ShapeType.STAR]:     0xef4444, [ShapeType.NONE]:    0x8b5cf6,
-      });
+
+    if (Object.keys(this.colors).length === 0) {
+      this.colors = {
+        [ShapeType.TRIANGLE]: 0x3b82f6,
+        [ShapeType.SQUARE]: 0x22c55e,
+        [ShapeType.PENTAGON]: 0xec4899,
+        [ShapeType.HEXAGON]: 0xeab308,
+        [ShapeType.STAR]: 0xef4444,
+        [ShapeType.NONE]: 0x8b5cf6
+      };
     }
   }
 
-  preload() { this.buildTextures(); }
+  preload() {
+    this.createTextures();
+  }
 
-  create(data: { userCharId?: string; opponentCharId?: string }) {
+  private createTextures() {
+    const graphics = this.make.graphics({ x: 0, y: 0 });
+
+    Object.entries(this.colors).forEach(([type, color]) => {
+      graphics.clear();
+      const size = CELL_SIZE * 0.7;
+      const center = CELL_SIZE / 2;
+
+      if (type === ShapeType.NONE) {
+        graphics.fillStyle(0x111111, 1);
+        graphics.fillCircle(center, center, size / 2 + 4);
+        graphics.lineStyle(3, 0x8b5cf6, 1);
+        graphics.strokeCircle(center, center, size / 2 + 4);
+        graphics.fillStyle(0x8b5cf6, 0.5);
+        graphics.fillCircle(center, center, size / 3);
+        graphics.fillStyle(0xffffff, 0.8);
+        graphics.fillCircle(center, center, size / 6);
+      } else {
+        this.drawGem(graphics, type as ShapeType, color, center, size);
+      }
+
+      graphics.generateTexture(`shape_${type}`, CELL_SIZE, CELL_SIZE);
+    });
+
+    const skillIcons = ['slash', 'fury', 'fireball', 'arcane_focus', 'ice_lance'];
+    skillIcons.forEach(icon => {
+      graphics.clear();
+      graphics.fillStyle(0xffffff, 1);
+      graphics.fillRect(0, 0, 64, 64);
+      graphics.generateTexture(`icon_${icon}`, 64, 64);
+    });
+    graphics.clear();
+    graphics.fillStyle(0xffffff, 0.9);
+
+    graphics.beginPath();
+    graphics.moveTo(CELL_SIZE * 0.1, CELL_SIZE / 2);
+    graphics.lineTo(CELL_SIZE * 0.3, CELL_SIZE * 0.35);
+    graphics.lineTo(CELL_SIZE * 0.3, CELL_SIZE * 0.65);
+    graphics.closePath();
+    graphics.fillPath();
+
+    graphics.beginPath();
+    graphics.moveTo(CELL_SIZE * 0.9, CELL_SIZE / 2);
+    graphics.lineTo(CELL_SIZE * 0.7, CELL_SIZE * 0.35);
+    graphics.lineTo(CELL_SIZE * 0.7, CELL_SIZE * 0.65);
+    graphics.closePath();
+    graphics.fillPath();
+
+    graphics.beginPath();
+    graphics.moveTo(CELL_SIZE / 2, CELL_SIZE * 0.1);
+    graphics.lineTo(CELL_SIZE * 0.35, CELL_SIZE * 0.3);
+    graphics.lineTo(CELL_SIZE * 0.65, CELL_SIZE * 0.3);
+    graphics.closePath();
+    graphics.fillPath();
+
+    graphics.beginPath();
+    graphics.moveTo(CELL_SIZE / 2, CELL_SIZE * 0.9);
+    graphics.lineTo(CELL_SIZE * 0.35, CELL_SIZE * 0.7);
+    graphics.lineTo(CELL_SIZE * 0.65, CELL_SIZE * 0.7);
+    graphics.closePath();
+    graphics.fillPath();
+
+    graphics.lineStyle(3, 0xffffff, 0.8);
+    graphics.strokeCircle(CELL_SIZE / 2, CELL_SIZE / 2, CELL_SIZE * 0.2);
+    graphics.generateTexture('special_pulsar', CELL_SIZE, CELL_SIZE);
+
+    graphics.clear();
+    graphics.fillStyle(0xffffff, 0.9);
+    graphics.beginPath();
+    graphics.moveTo(CELL_SIZE / 2, CELL_SIZE * 0.15);
+    graphics.lineTo(CELL_SIZE * 0.65, CELL_SIZE * 0.4);
+    graphics.lineTo(CELL_SIZE * 0.65, CELL_SIZE * 0.7);
+    graphics.lineTo(CELL_SIZE * 0.35, CELL_SIZE * 0.7);
+    graphics.lineTo(CELL_SIZE * 0.35, CELL_SIZE * 0.4);
+    graphics.closePath();
+    graphics.fillPath();
+    graphics.fillStyle(0xff3300, 0.9);
+    graphics.beginPath();
+    graphics.moveTo(CELL_SIZE * 0.35, CELL_SIZE * 0.5);
+    graphics.lineTo(CELL_SIZE * 0.15, CELL_SIZE * 0.75);
+    graphics.lineTo(CELL_SIZE * 0.35, CELL_SIZE * 0.7);
+    graphics.closePath();
+    graphics.fillPath();
+    graphics.beginPath();
+    graphics.moveTo(CELL_SIZE * 0.65, CELL_SIZE * 0.5);
+    graphics.lineTo(CELL_SIZE * 0.85, CELL_SIZE * 0.75);
+    graphics.lineTo(CELL_SIZE * 0.65, CELL_SIZE * 0.7);
+    graphics.closePath();
+    graphics.fillPath();
+    graphics.fillStyle(0x00ffff, 0.9);
+    graphics.fillCircle(CELL_SIZE / 2, CELL_SIZE * 0.45, CELL_SIZE * 0.1);
+    graphics.fillStyle(0xffaa00, 0.9);
+    graphics.beginPath();
+    graphics.moveTo(CELL_SIZE * 0.4, CELL_SIZE * 0.7);
+    graphics.lineTo(CELL_SIZE / 2, CELL_SIZE * 0.9);
+    graphics.lineTo(CELL_SIZE * 0.6, CELL_SIZE * 0.7);
+    graphics.closePath();
+    graphics.fillPath();
+    graphics.generateTexture('special_missile', CELL_SIZE, CELL_SIZE);
+
+    graphics.clear();
+    graphics.lineStyle(4, 0x444444, 1);
+    graphics.strokeCircle(CELL_SIZE / 2, CELL_SIZE / 2, CELL_SIZE * 0.35);
+    graphics.lineStyle(2, 0xffffff, 0.8);
+    graphics.strokeCircle(CELL_SIZE / 2, CELL_SIZE / 2, CELL_SIZE * 0.35);
+    graphics.lineStyle(3, 0xffaa00, 1);
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2;
+      graphics.moveTo(CELL_SIZE / 2 + Math.cos(angle) * CELL_SIZE * 0.35, CELL_SIZE / 2 + Math.sin(angle) * CELL_SIZE * 0.35);
+      graphics.lineTo(CELL_SIZE / 2 + Math.cos(angle) * CELL_SIZE * 0.45, CELL_SIZE / 2 + Math.sin(angle) * CELL_SIZE * 0.45);
+    }
+    graphics.strokePath();
+    graphics.fillStyle(0xff3300, 1);
+    graphics.fillCircle(CELL_SIZE * 0.75, CELL_SIZE * 0.25, CELL_SIZE * 0.12);
+    graphics.fillStyle(0xffaa00, 1);
+    graphics.fillCircle(CELL_SIZE * 0.75, CELL_SIZE * 0.25, CELL_SIZE * 0.08);
+    graphics.fillStyle(0xffffff, 1);
+    graphics.fillCircle(CELL_SIZE * 0.75, CELL_SIZE * 0.25, CELL_SIZE * 0.04);
+    graphics.generateTexture('special_bomb', CELL_SIZE, CELL_SIZE);
+
+    graphics.clear();
+    graphics.lineStyle(3, 0xd946ef, 1);
+    graphics.fillStyle(0x8b5cf6, 0.9);
+    this.drawStar(graphics, CELL_SIZE / 2, CELL_SIZE / 2, 12, CELL_SIZE * 0.45, CELL_SIZE * 0.2);
+    graphics.fillPath();
+    graphics.strokePath();
+    graphics.fillStyle(0xffffff, 0.8);
+    graphics.fillCircle(CELL_SIZE / 2, CELL_SIZE / 2, CELL_SIZE * 0.1);
+    graphics.generateTexture('special_parasite', CELL_SIZE, CELL_SIZE);
+
+    graphics.clear();
+    graphics.fillStyle(0xffffff, 1);
+    graphics.fillCircle(4, 4, 4);
+    graphics.generateTexture('particle', 8, 8);
+
+    graphics.clear();
+    graphics.fillStyle(0xffffff, 0.8);
+    graphics.fillCircle(2, 2, 2);
+    graphics.generateTexture('star_particle', 4, 4);
+  }
+
+  private drawGem(graphics: Phaser.GameObjects.Graphics, type: ShapeType, color: number, center: number, size: number) {
+    const colorObj = Phaser.Display.Color.ValueToColor(color);
+    const lightColor = colorObj.clone().lighten(30).color;
+    const darkColor = colorObj.clone().darken(30).color;
+
+    graphics.fillStyle(0x000000, 0.4);
+    this.drawShapePath(graphics, type, center, center + 4, size);
+    graphics.fillPath();
+
+    graphics.fillStyle(darkColor, 1);
+    this.drawShapePath(graphics, type, center, center, size);
+    graphics.fillPath();
+
+    graphics.fillStyle(color, 1);
+    this.drawShapePath(graphics, type, center, center, size * 0.85);
+    graphics.fillPath();
+
+    graphics.fillStyle(lightColor, 1);
+    this.drawShapePath(graphics, type, center, center, size * 0.5);
+    graphics.fillPath();
+
+    graphics.fillStyle(0xffffff, 0.5);
+    graphics.beginPath();
+    graphics.arc(center - size * 0.15, center - size * 0.15, size * 0.15, 0, Math.PI * 2);
+    graphics.fillPath();
+  }
+
+  private drawShapePath(graphics: Phaser.GameObjects.Graphics, type: ShapeType, x: number, y: number, size: number) {
+    graphics.beginPath();
+    switch (type) {
+      case ShapeType.TRIANGLE:
+        graphics.moveTo(x, y - size / 2);
+        graphics.lineTo(x - size / 2, y + size / 2);
+        graphics.lineTo(x + size / 2, y + size / 2);
+        break;
+      case ShapeType.SQUARE:
+        graphics.moveTo(x - size / 2, y - size / 2);
+        graphics.lineTo(x + size / 2, y - size / 2);
+        graphics.lineTo(x + size / 2, y + size / 2);
+        graphics.lineTo(x - size / 2, y + size / 2);
+        break;
+      case ShapeType.PENTAGON:
+        for (let i = 0; i < 5; i++) {
+          const angle = (i / 5) * Math.PI * 2 - Math.PI / 2;
+          const px = x + Math.cos(angle) * (size / 2);
+          const py = y + Math.sin(angle) * (size / 2);
+          if (i === 0) graphics.moveTo(px, py); else graphics.lineTo(px, py);
+        }
+        break;
+      case ShapeType.HEXAGON:
+        for (let i = 0; i < 6; i++) {
+          const angle = (i / 6) * Math.PI * 2 - Math.PI / 2;
+          const px = x + Math.cos(angle) * (size / 2);
+          const py = y + Math.sin(angle) * (size / 2);
+          if (i === 0) graphics.moveTo(px, py); else graphics.lineTo(px, py);
+        }
+        break;
+      case ShapeType.STAR:
+        const outerRadius = size / 2;
+        const innerRadius = size / 4;
+        for (let i = 0; i < 10; i++) {
+          const radius = i % 2 === 0 ? outerRadius : innerRadius;
+          const angle = (i / 10) * Math.PI * 2 - Math.PI / 2;
+          const px = x + Math.cos(angle) * radius;
+          const py = y + Math.sin(angle) * radius;
+          if (i === 0) graphics.moveTo(px, py); else graphics.lineTo(px, py);
+        }
+        break;
+      case ShapeType.NONE:
+        graphics.arc(x, y, size / 2, 0, Math.PI * 2);
+        break;
+    }
+    graphics.closePath();
+  }
+
+  private drawStar(graphics: Phaser.GameObjects.Graphics, x: number, y: number, points: number, outerRadius: number, innerRadius: number) {
+    const step = Math.PI / points;
+    graphics.beginPath();
+    for (let i = 0; i < 2 * points; i++) {
+      const r = (i % 2 === 0) ? outerRadius : innerRadius;
+      const angle = i * step - Math.PI / 2;
+      const px = x + Math.cos(angle) * r;
+      const py = y + Math.sin(angle) * r;
+      if (i === 0) graphics.moveTo(px, py); else graphics.lineTo(px, py);
+    }
+    graphics.closePath();
+    graphics.fillPath();
+    graphics.strokePath();
+  }
+
+  create(data: { userCharId?: string, opponentCharId?: string }) {
     this.logic = new GameLogic(GRID_SIZE);
     this.logic.initializeGrid();
-    while (!this.logic.hasPossibleMoves()) this.logic.initializeGrid();
+    while (!this.logic.hasPossibleMoves()) {
+      this.logic.initializeGrid();
+    }
     this.effectManager = new EffectManager(this);
 
-    this.buildBackground();
-    this.buildGrid();
-    this.buildTextPool();
+    const width = this.gameWidth;
+    const height = this.gameHeight;
+    const gridWidth = GRID_SIZE * CELL_SIZE;
+    const offsetX = this.getOffsetX();
+    const offsetY = this.getOffsetY();
 
-    // Selection indicator
-    this.selectionRect = this.add.rectangle(0, 0, CELL_SIZE, CELL_SIZE, 0xffffff, 0)
-      .setOrigin(0.5).setStrokeStyle(3, 0x00ffff).setVisible(false).setDepth(10);
-    this.tweens.add({ targets: this.selectionRect, alpha: 0.6, scale: 1.08,
-                      duration: 380, yoyo: true, repeat: -1 });
+    const bg = this.add.graphics();
+    bg.fillGradientStyle(0x0a0a2a, 0x1a0a3a, 0x0a1a3a, 0x050515, 1, 1, 1, 1);
+    bg.fillRect(0, 0, width, height);
 
+    this.add.particles(0, 0, 'star_particle', {
+      x: { min: 0, max: width },
+      y: { min: height, max: height + 100 },
+      lifespan: 10000,
+      speedY: { min: -10, max: -30 },
+      speedX: { min: -10, max: 10 },
+      scale: { start: 0.5, end: 1.5 },
+      alpha: { start: 0, end: 0.5, ease: 'Sine.easeInOut' },
+      quantity: 1,
+      frequency: 300,
+      blendMode: 'ADD'
+    });
+
+    this.add.image(width / 2, height / 2, 'menu_bg').setDisplaySize(width, height).setAlpha(0.2);
+
+    const boardBg = this.add.graphics();
+    boardBg.lineStyle(6, 0x4a00e0, 0.4);
+    boardBg.strokeRoundedRect(offsetX - 12, offsetY - 12, gridWidth + 24, gridWidth + 24, 20);
+    boardBg.fillStyle(0x000000, 0.6);
+    boardBg.fillRoundedRect(offsetX - 10, offsetY - 10, gridWidth + 20, gridWidth + 20, 16);
+    boardBg.lineStyle(2, 0xffffff, 0.05);
+    for (let i = 1; i < GRID_SIZE; i++) {
+      boardBg.moveTo(offsetX + i * CELL_SIZE, offsetY);
+      boardBg.lineTo(offsetX + i * CELL_SIZE, offsetY + gridWidth);
+      boardBg.moveTo(offsetX, offsetY + i * CELL_SIZE);
+      boardBg.lineTo(offsetX + gridWidth, offsetY + i * CELL_SIZE);
+    }
+    boardBg.strokePath();
+
+    this.selectionRect = this.add.rectangle(0, 0, CELL_SIZE, CELL_SIZE, 0xffffff, 0);
+    this.selectionRect.setOrigin(0.5, 0.5);
+    this.selectionRect.setStrokeStyle(4, 0x00ffff, 1);
+    this.selectionRect.setVisible(false);
+    this.selectionRect.setDepth(10);
+
+    this.tweens.add({
+      targets: this.selectionRect,
+      alpha: 0.5,
+      scale: 1.1,
+      duration: 400,
+      yoyo: true,
+      repeat: -1
+    });
+
+    this.initVisualGrid(offsetX, offsetY);
+
+    /*
+     * SwipeHandler
+     * ─────────────
+     * We pass a guard that checks BOTH isProcessing AND GlobalInputManager's
+     * block state so that board animations and opponent turns both suppress
+     * player input through a single consistent mechanism.
+     */
+    const gim = GlobalInputManager.getInstance();
     this.swipeHandler = new SwipeHandler(
-      this, CELL_SIZE, this.gridOffX, this.gridOffY, GRID_SIZE,
-      (s, e) => {
-        if (!this.isProcessing && CombatManager.getInstance().currentTurn === 'USER')
-          this.swapCells(s.r, s.c, e.r, e.c);
+      this,
+      CELL_SIZE,
+      offsetX,
+      offsetY,
+      GRID_SIZE,
+      (start, end) => {
+        if (this.isProcessing || gim.isBlocked()) return;
+        if (CombatManager.getInstance().currentTurn !== 'USER') return;
+        this.swapCells(start.r, start.c, end.r, end.c);
       },
-      (r, c) => this.updateSelectionRect(r, c),
-      (r, c) => this.updateSelectionRect(r, c),
-      () => this.selectionRect.setVisible(false)
+      (r, c) => { this.updateSelectionRect(r, c); },
+      (r, c) => { this.updateSelectionRect(r, c); },
+      ()     => { this.selectionRect.setVisible(false); },
     );
 
     this.game.events.emit('SCENE_READY', 'Game_Scene');
 
-    const reg  = CombatRegistry.getInstance();
-    const user = reg.getCharacter(data?.userCharId || 'warrior');
-    const opp  = reg.getCharacter(data?.opponentCharId || 'mage');
-    if (user && opp) {
-      CombatManager.getInstance().init(user, opp);
-      this.buildHUD();
-      this.listenCombat();
+    const combatRegistry = CombatRegistry.getInstance();
+    const userCharId     = data?.userCharId     || 'warrior';
+    const opponentCharId = data?.opponentCharId || 'mage';
+
+    const user     = combatRegistry.getCharacter(userCharId);
+    const opponent = combatRegistry.getCharacter(opponentCharId);
+
+    if (user && opponent) {
+      CombatManager.getInstance().init(user, opponent);
+      this.createHUD();
+      this.setupCombatListeners();
+
       this.opponentAI = new OpponentAI(
-        this.game, this.logic,
-        async (r1, c1, r2, c2) => this.swapCells(r1, c1, r2, c2),
-        () => this.powerSurge
+        this.game,
+        this.logic,
+        async (r1, c1, r2, c2) => { await this.swapCells(r1, c1, r2, c2); },
+        () => this.powerSurge,
       );
     }
 
     this.events.on('shutdown', this.shutdown, this);
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Texture Generation (unchanged logic, tidied)
-  // ═══════════════════════════════════════════════════════════════════════════
+  private createHUD() {
+    const width   = this.gameWidth;
+    const height  = this.gameHeight;
+    const offsetX = this.getOffsetX();
+    const offsetY = this.getOffsetY();
+    const gridWidth = BASE_GRID_WIDTH;
 
-  private buildTextures() {
-    const g = this.make.graphics({ x: 0, y: 0 });
+    this.opponentHUD = this.add.container(HUD_CONFIG.marginX, HUD_CONFIG.marginY);
+    this.drawCharacterHUD(this.opponentHUD, 'OPPONENT', false);
 
-    Object.entries(this.colors).forEach(([type, color]) => {
-      g.clear();
-      const size = CELL_SIZE * 0.70, cx = CELL_SIZE / 2;
-      if (type === ShapeType.NONE) {
-        g.fillStyle(0x111111, 1);  g.fillCircle(cx, cx, size / 2 + 4);
-        g.lineStyle(2, 0x8b5cf6); g.strokeCircle(cx, cx, size / 2 + 4);
-        g.fillStyle(0x8b5cf6, 0.5); g.fillCircle(cx, cx, size / 3);
-        g.fillStyle(0xffffff, 0.8); g.fillCircle(cx, cx, size / 6);
+    this.userHUD = this.add.container(HUD_CONFIG.marginX, height - HUD_CONFIG.marginY - HUD_CONFIG.userHeight);
+    this.drawCharacterHUD(this.userHUD, 'USER', true);
+
+    const opponentHudBottom = HUD_CONFIG.marginY + HUD_CONFIG.opponentHeight;
+    const boardTop = offsetY;
+    const opponentQueuedY = opponentHudBottom + (boardTop - opponentHudBottom) / 2;
+
+    const boardBottom = offsetY + gridWidth;
+    const userHudTop  = height - HUD_CONFIG.marginY - HUD_CONFIG.userHeight;
+    const userQueuedY = boardBottom + (userHudTop - boardBottom) / 2;
+
+    this.queuedIconsContainer         = this.add.container(HUD_CONFIG.marginX + 240 * this.scaleFactor, userQueuedY);
+    this.opponentQueuedIconsContainer = this.add.container(HUD_CONFIG.marginX + 160 * this.scaleFactor, opponentQueuedY);
+
+    this.game.events.on('SKILL_QUEUED', (data: { character: string, icon: string, skillId: string }) => {
+      if (data.character === 'USER') {
+        const icon = this.add.image(0, 0, data.icon)
+          .setDisplaySize(84.5 * this.scaleFactor, 84.5 * this.scaleFactor)
+          .setInteractive({ useHandCursor: true });
+        icon.setData('skillId', data.skillId);
+        icon.on('pointerdown', () => {
+          CombatManager.getInstance().removeQueuedSkill(data.skillId, 'USER');
+        });
+        this.queuedIconsContainer.add(icon);
+        this.queuedIconsContainer.getAll().forEach((child, index) => {
+          (child as Phaser.GameObjects.Image).x = (index - (this.queuedIconsContainer.length - 1) / 2) * 92.5 * this.scaleFactor;
+        });
+        const skillBtn = this.skillButtons.find(btn => btn.getData('skillId') === data.skillId);
+        if (skillBtn) skillBtn.setVisible(false);
       } else {
-        this.drawGem(g, type as ShapeType, color as number, cx, size);
-      }
-      g.generateTexture(`shape_${type}`, CELL_SIZE, CELL_SIZE);
-    });
-
-    // Placeholder skill icons
-    ['slash','fury','fireball','arcane_focus','ice_lance','backstab','poison',
-     'smite','shield','ice_lance','arcane_focus'].forEach(n => {
-      if (!this.textures.exists(`icon_${n}`)) {
-        g.clear(); g.fillStyle(0x4b5563); g.fillRoundedRect(0, 0, 48, 48, 8);
-        g.generateTexture(`icon_${n}`, 48, 48);
+        const icon = this.add.image(0, 0, data.icon).setDisplaySize(37 * this.scaleFactor, 37 * this.scaleFactor);
+        icon.setData('skillId', data.skillId);
+        this.opponentQueuedIconsContainer.add(icon);
+        this.opponentQueuedIconsContainer.getAll().forEach((child, index) => {
+          (child as Phaser.GameObjects.Image).x = (index - (this.opponentQueuedIconsContainer.length - 1) / 2) * 46 * this.scaleFactor;
+        });
       }
     });
 
-    this.buildSpecialTextures(g);
-    g.destroy();
-  }
-
-  private buildSpecialTextures(g: Phaser.GameObjects.Graphics) {
-    const C = CELL_SIZE, H = C / 2;
-
-    // Pulsar
-    g.clear(); g.fillStyle(0xffffff, 0.9);
-    [[0.1,0.5,0.3,0.35,0.3,0.65],[0.9,0.5,0.7,0.35,0.7,0.65],
-     [0.5,0.1,0.35,0.3,0.65,0.3],[0.5,0.9,0.35,0.7,0.65,0.7]]
-    .forEach(([ax,ay,bx,by,cx,cy]) => {
-      g.beginPath(); g.moveTo(C*ax,C*ay); g.lineTo(C*bx,C*by); g.lineTo(C*cx,C*cy);
-      g.closePath(); g.fillPath();
+    this.game.events.on('SKILL_DEACTIVATED', (data: { character: string, icon: string, skillId?: string }) => {
+      if (data.character === 'USER') {
+        const icon = this.queuedIconsContainer.getAll().find((child) => {
+          const img = child as Phaser.GameObjects.Image;
+          return (data.skillId && img.getData('skillId') === data.skillId) || img.texture.key === data.icon;
+        });
+        if (icon) {
+          const skillId = icon.getData('skillId');
+          this.queuedIconsContainer.remove(icon, true);
+          this.queuedIconsContainer.getAll().forEach((child, index) => {
+            (child as Phaser.GameObjects.Image).x = (index - (this.queuedIconsContainer.length - 1) / 2) * 92.5 * this.scaleFactor;
+          });
+          if (skillId) {
+            const skillBtn = this.skillButtons.find(btn => btn.getData('skillId') === skillId);
+            if (skillBtn) skillBtn.setVisible(true);
+          }
+        }
+      } else {
+        const icon = this.opponentQueuedIconsContainer.getAll().find((child) => {
+          const img = child as Phaser.GameObjects.Image;
+          return (data.skillId && img.getData('skillId') === data.skillId) || img.texture.key === data.icon;
+        });
+        if (icon) {
+          this.opponentQueuedIconsContainer.remove(icon, true);
+          this.opponentQueuedIconsContainer.getAll().forEach((child, index) => {
+            (child as Phaser.GameObjects.Image).x = (index - (this.opponentQueuedIconsContainer.length - 1) / 2) * 46 * this.scaleFactor;
+          });
+        }
+      }
     });
-    g.lineStyle(2, 0xffffff, 0.7); g.strokeCircle(H, H, C * 0.18);
-    g.generateTexture('special_pulsar', C, C);
 
-    // Missile
-    g.clear(); g.fillStyle(0xffffff, 0.9);
-    g.beginPath(); g.moveTo(H, C*0.15);
-    g.lineTo(C*0.65, C*0.4); g.lineTo(C*0.65, C*0.7);
-    g.lineTo(C*0.35, C*0.7); g.lineTo(C*0.35, C*0.4);
-    g.closePath(); g.fillPath();
-    g.fillStyle(0xff3300, 0.9);
-    g.beginPath(); g.moveTo(C*0.35,C*0.5); g.lineTo(C*0.15,C*0.75); g.lineTo(C*0.35,C*0.7); g.closePath(); g.fillPath();
-    g.beginPath(); g.moveTo(C*0.65,C*0.5); g.lineTo(C*0.85,C*0.75); g.lineTo(C*0.65,C*0.7); g.closePath(); g.fillPath();
-    g.fillStyle(0x00ffff, 0.9); g.fillCircle(H, C*0.44, C*0.09);
-    g.fillStyle(0xffaa00, 0.9);
-    g.beginPath(); g.moveTo(C*0.4,C*0.7); g.lineTo(H,C*0.9); g.lineTo(C*0.6,C*0.7); g.closePath(); g.fillPath();
-    g.generateTexture('special_missile', C, C);
+    // Power HUD
+    const powerHudWidth  = 240 * this.scaleFactor;
+    const powerHudHeight = 120 * this.scaleFactor;
+    const powerHudX = width - offsetX - powerHudWidth;
+    const powerHudY = 96 * this.scaleFactor;
 
-    // Bomb
-    g.clear();
-    g.lineStyle(3, 0x555, 1); g.strokeCircle(H, H, C*0.34);
-    g.lineStyle(1, 0xfff, 0.7); g.strokeCircle(H, H, C*0.34);
-    g.lineStyle(2, 0xffaa00);
-    for (let i = 0; i < 8; i++) {
-      const a = (i/8)*Math.PI*2;
-      g.moveTo(H+Math.cos(a)*C*0.34, H+Math.sin(a)*C*0.34);
-      g.lineTo(H+Math.cos(a)*C*0.44, H+Math.sin(a)*C*0.44);
-    }
-    g.strokePath();
-    g.fillStyle(0xff3300); g.fillCircle(C*0.75, C*0.25, C*0.11);
-    g.fillStyle(0xffaa00); g.fillCircle(C*0.75, C*0.25, C*0.07);
-    g.fillStyle(0xffffff); g.fillCircle(C*0.75, C*0.25, C*0.04);
-    g.generateTexture('special_bomb', C, C);
+    this.powerHUD = this.add.container(powerHudX, powerHudY);
+    const powerBg = this.add.graphics();
+    powerBg.fillStyle(0x000000, 0.5);
+    powerBg.fillRoundedRect(0, 0, powerHudWidth, powerHudHeight, 24 * this.scaleFactor);
+    powerBg.lineStyle(2, 0xffffff, 0.1);
+    powerBg.strokeRoundedRect(0, 0, powerHudWidth, powerHudHeight, 24 * this.scaleFactor);
+    this.powerHUD.add(powerBg);
+    this.powerHUD.add(this.add.text(20 * this.scaleFactor, 22 * this.scaleFactor, 'POWER', {
+      fontFamily: 'monospace', fontSize: `${Math.floor(18 * this.scaleFactor)}px`, color: '#ffffff'
+    }).setAlpha(0.5));
+    this.powerText = this.add.text(20 * this.scaleFactor, 52 * this.scaleFactor, '0', {
+      fontFamily: 'monospace', fontSize: `${Math.floor(36 * this.scaleFactor)}px`, fontStyle: 'bold', color: '#fbbf24'
+    });
+    this.powerHUD.add(this.powerText);
 
-    // Parasite
-    g.clear(); g.lineStyle(2, 0xd946ef); g.fillStyle(0x8b5cf6, 0.9);
-    this.drawStarPath(g, H, H, 12, C*0.44, C*0.20);
-    g.fillPath(); g.strokePath();
-    g.fillStyle(0xffffff, 0.8); g.fillCircle(H, H, C*0.10);
-    g.generateTexture('special_parasite', C, C);
+    // Turn count HUD
+    const turnHudWidth  = 90 * this.scaleFactor;
+    const turnHudHeight = 120 * this.scaleFactor;
+    const turnHudX = powerHudX - 12 * this.scaleFactor - turnHudWidth;
+    const turnHudY = 96 * this.scaleFactor;
 
-    // Shared particles
-    g.clear(); g.fillStyle(0xffffff); g.fillCircle(4, 4, 4);
-    g.generateTexture('particle', 8, 8);
-    g.clear(); g.fillStyle(0xffffff, 0.7); g.fillCircle(2, 2, 2);
-    g.generateTexture('star_particle', 4, 4);
+    this.turnHUD = this.add.container(turnHudX, turnHudY);
+    const turnBg = this.add.graphics();
+    turnBg.fillStyle(0x000000, 0.5);
+    turnBg.fillRoundedRect(0, 0, turnHudWidth, turnHudHeight, 24 * this.scaleFactor);
+    turnBg.lineStyle(2, 0xffffff, 0.1);
+    turnBg.strokeRoundedRect(0, 0, turnHudWidth, turnHudHeight, 24 * this.scaleFactor);
+    this.turnHUD.add(turnBg);
+    this.turnHUD.add(this.add.text(turnHudWidth / 2, 22 * this.scaleFactor, 'TURNS', {
+      fontFamily: 'monospace', fontSize: `${Math.floor(18 * this.scaleFactor)}px`, color: '#ffffff'
+    }).setOrigin(0.5, 0).setAlpha(0.5));
+    this.turnCountText = this.add.text(turnHudWidth / 2, 52 * this.scaleFactor, '1', {
+      fontFamily: 'monospace', fontSize: `${Math.floor(36 * this.scaleFactor)}px`, fontStyle: 'bold', color: '#3b82f6'
+    }).setOrigin(0.5, 0);
+    this.turnHUD.add(this.turnCountText);
+
+    this.ActiveSkillButton();
+    this.handleTurnSwitched(CombatManager.getInstance().currentTurn);
   }
 
-  private drawGem(g: Phaser.GameObjects.Graphics, t: ShapeType, c: number, cx: number, sz: number) {
-    const co = Phaser.Display.Color.ValueToColor(c);
-    g.fillStyle(0x000000, 0.35); this.shapePath(g, t, cx, cx+3, sz);   g.fillPath();
-    g.fillStyle(co.clone().darken(28).color); this.shapePath(g, t, cx, cx, sz); g.fillPath();
-    g.fillStyle(c);              this.shapePath(g, t, cx, cx, sz*0.84); g.fillPath();
-    g.fillStyle(co.clone().lighten(28).color); this.shapePath(g, t, cx, cx, sz*0.50); g.fillPath();
-    g.fillStyle(0xffffff, 0.45);
-    g.beginPath(); g.arc(cx-sz*0.14, cx-sz*0.14, sz*0.14, 0, Math.PI*2); g.fillPath();
-  }
+  private ActiveSkillButton() {
+    const width   = this.gameWidth;
+    const height  = this.gameHeight;
 
-  private shapePath(g: Phaser.GameObjects.Graphics, t: ShapeType, x: number, y: number, sz: number) {
-    g.beginPath();
-    switch (t) {
-      case ShapeType.TRIANGLE: g.moveTo(x,y-sz/2); g.lineTo(x-sz/2,y+sz/2); g.lineTo(x+sz/2,y+sz/2); break;
-      case ShapeType.SQUARE:   g.moveTo(x-sz/2,y-sz/2); g.lineTo(x+sz/2,y-sz/2); g.lineTo(x+sz/2,y+sz/2); g.lineTo(x-sz/2,y+sz/2); break;
-      case ShapeType.PENTAGON: for(let i=0;i<5;i++){const a=(i/5)*Math.PI*2-Math.PI/2;i===0?g.moveTo(x+Math.cos(a)*sz/2,y+Math.sin(a)*sz/2):g.lineTo(x+Math.cos(a)*sz/2,y+Math.sin(a)*sz/2);} break;
-      case ShapeType.HEXAGON:  for(let i=0;i<6;i++){const a=(i/6)*Math.PI*2-Math.PI/6;i===0?g.moveTo(x+Math.cos(a)*sz/2,y+Math.sin(a)*sz/2):g.lineTo(x+Math.cos(a)*sz/2,y+Math.sin(a)*sz/2);} break;
-      case ShapeType.STAR:     for(let i=0;i<10;i++){const r=i%2===0?sz/2:sz/4;const a=(i/10)*Math.PI*2-Math.PI/2;i===0?g.moveTo(x+Math.cos(a)*r,y+Math.sin(a)*r):g.lineTo(x+Math.cos(a)*r,y+Math.sin(a)*r);} break;
-      default: g.arc(x, y, sz/2, 0, Math.PI*2);
-    }
-    g.closePath();
-  }
+    const combat = CombatManager.getInstance();
+    const user   = combat.user;
+    if (!user || !user.loadout.active) return;
 
-  private drawStarPath(g: Phaser.GameObjects.Graphics, x:number, y:number, pts:number, oR:number, iR:number) {
-    const step = Math.PI / pts;
-    g.beginPath();
-    for (let i = 0; i < 2*pts; i++) {
-      const r = i%2===0 ? oR : iR, a = i*step - Math.PI/2;
-      i===0 ? g.moveTo(x+Math.cos(a)*r, y+Math.sin(a)*r) : g.lineTo(x+Math.cos(a)*r, y+Math.sin(a)*r);
-    }
-    g.closePath();
-  }
+    const skillId = user.loadout.active;
+    const skill   = CombatRegistry.getInstance().getSkill(skillId);
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Background & Grid
-  // ═══════════════════════════════════════════════════════════════════════════
+    const size = 180 * this.scaleFactor;
+    const x    = width - this.getOffsetX() - size / 2;
+    const y    = height - HUD_CONFIG.marginY - HUD_CONFIG.userHeight / 2;
 
-  private buildBackground() {
-    const W = this.gameWidth, H = this.gameHeight;
+    this.activeSkillBtn = this.add.container(x, y);
+
     const bg = this.add.graphics();
-    bg.fillGradientStyle(0x0a0a2a, 0x1a0a3a, 0x0a1a3a, 0x050515, 1, 1, 1, 1);
-    bg.fillRect(0, 0, W, H);
+    bg.fillStyle(0x000000, 0.8);
+    bg.fillCircle(0, 0, size / 2);
+    bg.lineStyle(4, 0x10b981, 1);
+    bg.strokeCircle(0, 0, size / 2);
+    this.activeSkillBtn.add(bg);
 
-    // Subtle background particles
-    this.add.particles(0, 0, 'star_particle', {
-      x: { min: 0, max: W }, y: { min: H, max: H + 80 },
-      lifespan: 12000, speedY: { min: -8, max: -24 }, speedX: { min: -8, max: 8 },
-      scale: { start: 0.4, end: 1.2 }, alpha: { start: 0, end: 0.4 },
-      quantity: 1, frequency: 500, blendMode: 'ADD'
+    const icon  = this.add.text(0, -15 * this.scaleFactor, '⚡', { fontSize: `${Math.floor(60 * this.scaleFactor)}px` }).setOrigin(0.5);
+    const label = this.add.text(0, 35 * this.scaleFactor, skill ? skill.name.toUpperCase() : 'SKILL', {
+      fontFamily: 'monospace', fontSize: `${Math.floor(20 * this.scaleFactor)}px`, fontStyle: 'bold', color: '#ffffff'
+    }).setOrigin(0.5);
+    const costText = this.add.text(0, 60 * this.scaleFactor, skill ? `${skill.chargeCost} EP` : '', {
+      fontFamily: 'monospace', fontSize: `${Math.floor(16 * this.scaleFactor)}px`, color: '#3b82f6'
+    }).setOrigin(0.5);
+
+    this.activeSkillBtn.add([icon, label, costText]);
+    this.activeSkillBtn.setInteractive(new Phaser.Geom.Circle(0, 0, size / 2), Phaser.Geom.Circle.Contains);
+
+    this.activeSkillBtn.on('pointerover', () => {
+      SoundManager.getInstance().play(SoundType.SELECT);
+      this.tweens.add({ targets: this.activeSkillBtn, scale: 1.1, duration: 100 });
+      bg.clear();
+      bg.fillStyle(0x10b981, 0.2);
+      bg.fillCircle(0, 0, size / 2);
+      bg.lineStyle(4, 0x34d399, 1);
+      bg.strokeCircle(0, 0, size / 2);
+    });
+
+    this.activeSkillBtn.on('pointerout', () => {
+      this.tweens.add({ targets: this.activeSkillBtn, scale: 1.0, duration: 100 });
+      bg.clear();
+      bg.fillStyle(0x000000, 0.8);
+      bg.fillCircle(0, 0, size / 2);
+      bg.lineStyle(4, 0x10b981, 1);
+      bg.strokeCircle(0, 0, size / 2);
+    });
+
+    /*
+     * Use pointerup (not pointerdown) for the activation so that a touch that
+     * starts on the button but slides off doesn't trigger the skill.
+     */
+    this.activeSkillBtn.on('pointerup', (p: Phaser.Input.Pointer) => {
+      // Ignore if this was a drag (moved > 12px)
+      const downX = (p as any).downX ?? p.x;
+      const downY = (p as any).downY ?? p.y;
+      if (Math.sqrt((p.x - downX) ** 2 + (p.y - downY) ** 2) > 12) return;
+
+      SoundManager.getInstance().play(SoundType.CLICK);
+      this.tweens.add({ targets: this.activeSkillBtn, scale: 0.9, duration: 50, yoyo: true });
+
+      const c = CombatManager.getInstance();
+      const u = c.user;
+      if (u && skill && u.currentCharge >= skill.chargeCost && c.currentTurn === 'USER') {
+        this.game.events.emit('SKILL_ACTIVATED', { character: 'USER', skillId, powerSurge: this.powerSurge });
+      } else {
+        this.tweens.add({ targets: this.activeSkillBtn, x: x + 5 * this.scaleFactor, duration: 50, yoyo: true, repeat: 3 });
+        if (u && skill && u.currentCharge < skill.chargeCost && this.userChargeBar) {
+          this.tweens.add({ targets: this.userChargeBar, alpha: 0.2, duration: 100, yoyo: true, repeat: 1 });
+        }
+      }
     });
   }
 
-  private buildGrid() {
-    const ox = this.gridOffX, oy = this.gridOffY;
+  private drawCharacterHUD(container: Phaser.GameObjects.Container, type: string, isUser: boolean) {
+    const combat = CombatManager.getInstance();
+    const char   = isUser ? combat.user : combat.opponent;
+    if (!char) return;
 
-    // Board background
-    const board = this.add.graphics();
-    board.lineStyle(4, 0x4a00e0, 0.35);
-    board.strokeRoundedRect(ox - 8, oy - 8, GRID_PX + 16, GRID_PX + 16, 14);
-    board.fillStyle(0x000000, 0.55);
-    board.fillRoundedRect(ox - 6, oy - 6, GRID_PX + 12, GRID_PX + 12, 12);
-    board.lineStyle(1, 0xffffff, 0.04);
-    for (let i = 1; i < GRID_SIZE; i++) {
-      board.moveTo(ox + i*CELL_SIZE, oy); board.lineTo(ox + i*CELL_SIZE, oy + GRID_PX);
-      board.moveTo(ox, oy + i*CELL_SIZE); board.lineTo(ox + GRID_PX, oy + i*CELL_SIZE);
+    const hudWidth  = isUser ? HUD_CONFIG.userWidth  : HUD_CONFIG.opponentWidth;
+    const hudHeight = isUser ? HUD_CONFIG.userHeight : HUD_CONFIG.opponentHeight;
+
+    const glow = this.add.graphics();
+    glow.setAlpha(0);
+    container.add(glow);
+    if (isUser) this.userGlow = glow; else this.opponentGlow = glow;
+
+    const bg = this.add.graphics();
+    bg.fillStyle(0x000000, 0.5);
+    bg.fillRoundedRect(0, 0, hudWidth, hudHeight, 20 * this.scaleFactor);
+    bg.lineStyle(2, isUser ? 0x10b981 : 0xef4444, 0.3);
+    bg.strokeRoundedRect(0, 0, hudWidth, hudHeight, 20 * this.scaleFactor);
+    container.add(bg);
+
+    this.updateGlow(glow, hudWidth, hudHeight, isUser ? 0x10b981 : 0xef4444);
+
+    const nameText = this.add.text(15 * this.scaleFactor, 15 * this.scaleFactor, char.name.toUpperCase(), {
+      fontFamily: 'monospace', fontSize: `${Math.floor(24 * this.scaleFactor)}px`, fontStyle: 'bold',
+      color: isUser ? '#34d399' : '#f87171'
+    });
+    container.add(nameText);
+
+    const classText = this.add.text(hudWidth - 15 * this.scaleFactor, 15 * this.scaleFactor, char.classType, {
+      fontFamily: 'monospace', fontSize: `${Math.floor(22 * this.scaleFactor)}px`, color: '#ffffff'
+    }).setOrigin(1, 0).setAlpha(0.5);
+    container.add(classText);
+
+    const gemIcon = this.add.image(hudWidth - 15 * this.scaleFactor, 45 * this.scaleFactor, `shape_${char.linkedGem}`)
+      .setScale(2.5 * this.scaleFactor).setOrigin(1, 0);
+    container.add(gemIcon);
+
+    // HP bar
+    container.add(this.add.text(15 * this.scaleFactor, 55 * this.scaleFactor, 'HP', {
+      fontSize: `${Math.floor(15 * this.scaleFactor)}px`, color: '#ffffff'
+    }).setAlpha(0.7));
+    const barWidth = isUser ? HUD_CONFIG.userBarWidth : HUD_CONFIG.opponentBarWidth;
+    const hpValText = this.add.text(15 * this.scaleFactor + barWidth, 55 * this.scaleFactor, `${Math.floor(char.currentHp)}/${char.maxHp}`, {
+      fontSize: `${Math.floor(15 * this.scaleFactor)}px`, fontFamily: 'monospace', color: '#ffffff'
+    }).setOrigin(1, 0).setAlpha(0.7);
+    container.add(hpValText);
+    if (isUser) this.userHpText = hpValText; else this.opponentHpText = hpValText;
+
+    const hpBar = this.add.graphics();
+    container.add(hpBar);
+    if (isUser) this.userHpBar = hpBar; else this.opponentHpBar = hpBar;
+    this.updateBar(hpBar, char.currentHp / char.maxHp, isUser ? HUD_CONFIG.colors.hp : HUD_CONFIG.colors.opponentHp, barWidth, 70 * this.scaleFactor);
+
+    // Charge bar
+    container.add(this.add.text(15 * this.scaleFactor, 95 * this.scaleFactor, 'CHARGE', {
+      fontSize: `${Math.floor(15 * this.scaleFactor)}px`, color: '#ffffff'
+    }).setAlpha(0.7));
+    const chargeValText = this.add.text(15 * this.scaleFactor + barWidth, 95 * this.scaleFactor, `${Math.floor(char.currentCharge)}/${char.maxCharge}`, {
+      fontSize: `${Math.floor(15 * this.scaleFactor)}px`, fontFamily: 'monospace', color: '#ffffff'
+    }).setOrigin(1, 0).setAlpha(0.7);
+    container.add(chargeValText);
+    if (isUser) this.userChargeText = chargeValText; else this.opponentChargeText = chargeValText;
+
+    const chargeBar = this.add.graphics();
+    container.add(chargeBar);
+    if (isUser) this.userChargeBar = chargeBar; else this.opponentChargeBar = chargeBar;
+    this.updateBar(chargeBar, char.currentCharge / char.maxCharge, isUser ? HUD_CONFIG.colors.charge : HUD_CONFIG.colors.opponentCharge, barWidth, 110 * this.scaleFactor);
+
+    // Stats
+    const statsContainer = this.add.container(15 * this.scaleFactor, 145 * this.scaleFactor);
+    const statStyle = { fontSize: `${Math.floor(14 * this.scaleFactor)}px`, fontFamily: 'monospace', color: '#aaaaaa' };
+    const valStyle  = { fontSize: `${Math.floor(14 * this.scaleFactor)}px`, fontFamily: 'monospace', color: '#ffffff', fontStyle: 'bold' };
+    const stats = [
+      { label: 'STR', val: char.stats.strength,   x: 0,                    y: 0 },
+      { label: 'END', val: char.stats.endurance,   x: 68 * this.scaleFactor,  y: 0 },
+      { label: 'PWR', val: char.stats.power,       x: 135 * this.scaleFactor, y: 0 },
+      { label: 'RES', val: char.stats.resistance,  x: 202 * this.scaleFactor, y: 0 },
+      { label: 'SPD', val: char.stats.speed,       x: 270 * this.scaleFactor, y: 0 },
+      { label: 'ACC', val: char.stats.accuracy,    x: 338 * this.scaleFactor, y: 0 },
+    ];
+    stats.forEach(s => {
+      statsContainer.add(this.add.text(s.x, s.y, `${s.label}:`, statStyle));
+      statsContainer.add(this.add.text(s.x + 22 * this.scaleFactor, s.y, s.val.toString(), valStyle));
+    });
+    container.add(statsContainer);
+
+    // Skill buttons (user only)
+    if (isUser) {
+      const skillY       = 190 * this.scaleFactor;
+      const stackSkills  = char.loadout.stacks || [];
+      const numSkills    = stackSkills.length;
+
+      if (numSkills > 0) {
+        const padding        = 15 * this.scaleFactor;
+        const spacing        = 10 * this.scaleFactor;
+        const availableWidth = hudWidth - (padding * 2);
+        let btnWidth = (availableWidth - (numSkills - 1) * spacing) / numSkills;
+        btnWidth = Math.max(128 * this.scaleFactor, Math.min(200 * this.scaleFactor, btnWidth));
+
+        const totalWidth  = (numSkills * btnWidth) + (numSkills - 1) * spacing;
+        const isOverflow  = totalWidth > availableWidth;
+        const skillListContainer = this.add.container(0, 0);
+        container.add(skillListContainer);
+
+        if (isOverflow) {
+          const worldX     = container.x + padding;
+          const worldY     = container.y + skillY;
+          const maskShape  = this.make.graphics({ x: 0, y: 0 });
+          maskShape.fillStyle(0xffffff);
+          maskShape.fillRoundedRect(worldX, worldY, availableWidth, 60 * this.scaleFactor, 8 * this.scaleFactor);
+          skillListContainer.setMask(maskShape.createGeometryMask());
+          skillListContainer.x = padding;
+
+          const scrollHitArea = new Phaser.Geom.Rectangle(0, skillY, totalWidth, 60 * this.scaleFactor);
+          skillListContainer.setInteractive(scrollHitArea, Phaser.Geom.Rectangle.Contains);
+          this.input.setDraggable(skillListContainer);
+          skillListContainer.on('drag', (_pointer: any, dragX: number) => {
+            const minX = padding - (totalWidth - availableWidth);
+            const maxX = padding;
+            skillListContainer.x = Phaser.Math.Clamp(dragX, minX, maxX);
+          });
+        } else {
+          skillListContainer.x = (hudWidth - totalWidth) / 2;
+        }
+
+        stackSkills.forEach((skillId, i) => {
+          const skillBtn = this.add.container(i * (btnWidth + spacing), skillY);
+          skillBtn.setData('skillId', skillId);
+
+          const btnBg = this.add.graphics();
+          btnBg.fillStyle(0xffffff, 0.1);
+          btnBg.fillRoundedRect(0, 0, btnWidth, 40 * this.scaleFactor, 8 * this.scaleFactor);
+          skillBtn.add(btnBg);
+
+          const skill = CombatRegistry.getInstance().getSkill(skillId);
+          if (skill) {
+            const icon = this.add.image(10 * this.scaleFactor, 20 * this.scaleFactor, skill.icon)
+              .setDisplaySize(24 * this.scaleFactor, 24 * this.scaleFactor).setOrigin(0, 0.5);
+            skillBtn.add(icon);
+
+            let displayName = skill.name;
+            const charWidth       = 6 * this.scaleFactor;
+            const costLabelWidth  = 25 * this.scaleFactor;
+            const avail           = btnWidth - 40 * this.scaleFactor - costLabelWidth - 10 * this.scaleFactor;
+            const maxChars        = Math.floor(avail / charWidth);
+            if (displayName.length > maxChars) {
+              displayName = displayName.substring(0, Math.max(0, maxChars - 3)) + '...';
+            }
+
+            const nameLabel = this.add.text(40 * this.scaleFactor, 20 * this.scaleFactor, displayName, {
+              fontSize: `${Math.floor(10 * this.scaleFactor)}px`, fontFamily: 'monospace', color: '#ffffff'
+            }).setOrigin(0, 0.5);
+            skillBtn.add(nameLabel);
+
+            const costLabel = this.add.text(btnWidth - 10 * this.scaleFactor, 20 * this.scaleFactor, `${skill.chargeCost}`, {
+              fontSize: `${Math.floor(10 * this.scaleFactor)}px`, fontFamily: 'monospace', color: '#fbbf24', fontStyle: 'bold'
+            }).setOrigin(1, 0.5);
+            skillBtn.add(costLabel);
+          }
+
+          skillBtn.setInteractive(new Phaser.Geom.Rectangle(0, 0, btnWidth, 40 * this.scaleFactor), Phaser.Geom.Rectangle.Contains);
+
+          // Use pointerup + distance check for reliable tap detection on touch screens
+          let btnDownX = 0, btnDownY = 0;
+          skillBtn.on('pointerdown', (p: Phaser.Input.Pointer) => { btnDownX = p.x; btnDownY = p.y; });
+          skillBtn.on('pointerup', (p: Phaser.Input.Pointer) => {
+            const dist = Math.sqrt((p.x - btnDownX) ** 2 + (p.y - btnDownY) ** 2);
+            if (dist > 12) return; // was a drag, not a tap
+
+            const c     = CombatManager.getInstance();
+            const u     = c.user;
+            const skill = CombatRegistry.getInstance().getSkill(skillId);
+
+            if (u && skill && u.currentCharge >= skill.chargeCost && c.currentTurn === 'USER') {
+              this.game.events.emit('SKILL_ACTIVATED', { character: 'USER', skillId, moveScore: 0, comboNumber: 1, powerSurge: this.powerSurge });
+            } else if (u && skill) {
+              this.tweens.add({ targets: skillBtn, x: skillBtn.x + 5, duration: 50, yoyo: true, repeat: 3 });
+              if (u.currentCharge < skill.chargeCost && this.userChargeBar) {
+                this.tweens.add({ targets: this.userChargeBar, alpha: 0.2, duration: 100, yoyo: true, repeat: 1 });
+              }
+            }
+          });
+
+          skillListContainer.add(skillBtn);
+          this.skillButtons.push(skillBtn);
+        });
+      }
     }
-    board.strokePath();
+  }
 
-    // Spawn visual cells
-    this.visualGrid = [];
+  private updateBar(graphics: Phaser.GameObjects.Graphics, percent: number, color: number, width: number, y: number) {
+    graphics.clear();
+    graphics.fillStyle(0x000000, 0.5);
+    graphics.fillRoundedRect(15 * this.scaleFactor, y, width, HUD_CONFIG.barHeight * this.scaleFactor, 7 * this.scaleFactor);
+    graphics.fillStyle(color, 1);
+    if (percent > 0) {
+      graphics.fillRoundedRect(15 * this.scaleFactor, y, width * percent, HUD_CONFIG.barHeight * this.scaleFactor, 7 * this.scaleFactor);
+    }
+  }
+
+  private setupCombatListeners() {
+    this.game.events.on('HP_UPDATED',     this.handleHpUpdated,     this);
+    this.game.events.on('CHARGE_UPDATED', this.handleChargeUpdated, this);
+    this.game.events.on('POWER_UPDATE',   this.handlePowerUpdate,   this);
+    this.game.events.on('TURN_SWITCHED',  this.handleTurnSwitched,  this);
+    this.game.events.on('SKILL_EXECUTED', this.handleSkillExecuted, this);
+    this.game.events.on('SKILL_MISSED',   this.handleSkillMissed,   this);
+    this.game.events.on('GAME_OVER',      this.handleGameOver,      this);
+  }
+
+  private handleGameOver = (data: { winner: string }) => {
+    if (this.isGameOver) return;
+    this.isGameOver  = true;
+    this.isProcessing = true;
+    GlobalInputManager.getInstance().block();
+
+    const isUserWinner = data.winner === 'USER';
+    const width = this.gameWidth;
+    const height = this.gameHeight;
+
+    const overlay = this.add.rectangle(0, 0, width, height, 0x000000, 0.7).setOrigin(0);
+    overlay.setInteractive();
+    overlay.setDepth(1000);
+
+    const resultText  = isUserWinner ? 'VICTORY!' : 'DEFEAT...';
+    const resultColor = isUserWinner ? '#10b981' : '#ef4444';
+
+    const title = this.add.text(width / 2, height / 2 - 50 * this.scaleFactor, resultText, {
+      fontFamily: 'monospace', fontSize: `${Math.floor(84 * this.scaleFactor)}px`, fontStyle: 'bold',
+      color: resultColor, stroke: '#ffffff', strokeThickness: 8 * this.scaleFactor
+    }).setOrigin(0.5).setScale(0).setDepth(1001);
+
+    const powerLabel = this.add.text(width / 2, height / 2 + 50 * this.scaleFactor, `Final Power: ${this.powerSurge}`, {
+      fontFamily: 'monospace', fontSize: `${Math.floor(32 * this.scaleFactor)}px`, color: '#ffffff'
+    }).setOrigin(0.5).setAlpha(0).setDepth(1001);
+
+    const restartBtn = this.add.container(width / 2, height / 2 + 150 * this.scaleFactor);
+    restartBtn.setDepth(1001);
+    const btnBg   = this.add.rectangle(0, 0, 200 * this.scaleFactor, 60 * this.scaleFactor, 0xffffff, 0.2).setStrokeStyle(2 * this.scaleFactor, 0xffffff);
+    const btnText = this.add.text(0, 0, 'RESTART', {
+      fontFamily: 'monospace', fontSize: `${Math.floor(24 * this.scaleFactor)}px`, fontStyle: 'bold', color: '#ffffff'
+    }).setOrigin(0.5);
+    restartBtn.add([btnBg, btnText]);
+    restartBtn.setSize(200 * this.scaleFactor, 60 * this.scaleFactor);
+    restartBtn.setInteractive({ useHandCursor: true });
+    restartBtn.setAlpha(0);
+
+    restartBtn.on('pointerover', () => btnBg.setFillStyle(0xffffff, 0.4));
+    restartBtn.on('pointerout',  () => btnBg.setFillStyle(0xffffff, 0.2));
+    restartBtn.on('pointerup',   () => {
+      GlobalInputManager.getInstance().unblock();
+      this.scene.restart();
+    });
+
+    this.tweens.add({ targets: title, scale: 1, duration: 800, ease: 'Back.easeOut' });
+    this.tweens.add({ targets: [powerLabel, restartBtn], alpha: 1, duration: 500, delay: 800 });
+  };
+
+  private handleSkillMissed = (data: { skill: any, character: string }) => {
+    const isUser = data.character === 'USER';
+    const x = this.gameWidth / 2;
+    const y = isUser ? this.gameHeight - 200 * this.scaleFactor : 200 * this.scaleFactor;
+    const missText = this.add.text(x, y, 'MISSED!', {
+      fontFamily: 'monospace', fontSize: `${Math.floor(48 * this.scaleFactor)}px`, fontStyle: 'bold',
+      color: '#ef4444', stroke: '#000000', strokeThickness: 6 * this.scaleFactor
+    }).setOrigin(0.5);
+    this.tweens.add({ targets: missText, y: y - 100 * this.scaleFactor, alpha: 0, scale: 1.5, duration: 1000, ease: 'Cubic.easeOut', onComplete: () => missText.destroy() });
+  };
+
+  private handleSkillExecuted = (data: { skill: any, character: string }) => {
+    const isUser = data.character === 'USER';
+    const x = this.gameWidth / 2;
+    const y = isUser ? this.gameHeight - 200 * this.scaleFactor : 200 * this.scaleFactor;
+    const text = this.add.text(x, y, data.skill.name.toUpperCase(), {
+      fontFamily: 'monospace', fontSize: `${Math.floor(48 * this.scaleFactor)}px`, fontStyle: 'bold',
+      color: isUser ? '#10b981' : '#ef4444', stroke: '#000000', strokeThickness: 6 * this.scaleFactor
+    }).setOrigin(0.5).setAlpha(0).setScale(0.5);
+    this.tweens.add({
+      targets: text, alpha: 1, scale: 1.2, duration: 300, ease: 'Back.easeOut',
+      onComplete: () => {
+        this.tweens.add({ targets: text, alpha: 0, y: y - 50 * this.scaleFactor, duration: 500, delay: 500, ease: 'Power2', onComplete: () => text.destroy() });
+      }
+    });
+  };
+
+  private handleTurnSwitched = (turn: string) => {
+    const combat = CombatManager.getInstance();
+    this.turnCountText.setText(combat.turnCount.toString());
+    if (turn === 'USER') {
+      this.tweens.add({ targets: this.userGlow,     alpha: 1, duration: 300 });
+      this.tweens.add({ targets: this.opponentGlow, alpha: 0, duration: 300 });
+    } else {
+      this.tweens.add({ targets: this.userGlow,     alpha: 0, duration: 300 });
+      this.tweens.add({ targets: this.opponentGlow, alpha: 1, duration: 300 });
+    }
+  };
+
+  private updateGlow(graphics: Phaser.GameObjects.Graphics, width: number, height: number, color: number) {
+    graphics.clear();
+    for (let i = 1; i <= 10; i++) {
+      graphics.lineStyle(i * 2 * this.scaleFactor, color, 0.1 / i);
+      graphics.strokeRoundedRect(-i * this.scaleFactor, -i * this.scaleFactor, width + i * 2 * this.scaleFactor, height + i * 2 * this.scaleFactor, 20 * this.scaleFactor + i * this.scaleFactor);
+    }
+    graphics.lineStyle(3 * this.scaleFactor, color, 0.5);
+    graphics.strokeRoundedRect(0, 0, width, height, 20 * this.scaleFactor);
+  }
+
+  private handleHpUpdated = (data: any) => {
+    const isUser = data.character === 'USER';
+    const bar    = isUser ? this.userHpBar    : this.opponentHpBar;
+    const text   = isUser ? this.userHpText   : this.opponentHpText;
+    const color  = isUser ? HUD_CONFIG.colors.hp : HUD_CONFIG.colors.opponentHp;
+    const width  = isUser ? HUD_CONFIG.userBarWidth : HUD_CONFIG.opponentBarWidth;
+    this.updateBar(bar, data.hp / data.maxHp, color, width, 70 * this.scaleFactor);
+    if (text) text.setText(`${Math.floor(data.hp)}/${data.maxHp}`);
+  };
+
+  private handleChargeUpdated = (data: any) => {
+    const isUser = data.character === 'USER';
+    const bar    = isUser ? this.userChargeBar    : this.opponentChargeBar;
+    const text   = isUser ? this.userChargeText   : this.opponentChargeText;
+    const color  = isUser ? HUD_CONFIG.colors.charge : HUD_CONFIG.colors.opponentCharge;
+    const width  = isUser ? HUD_CONFIG.userBarWidth   : HUD_CONFIG.opponentBarWidth;
+    this.updateBar(bar, data.charge / data.maxCharge, color, width, 110 * this.scaleFactor);
+    if (text) text.setText(`${Math.floor(data.charge)}/${data.maxCharge}`);
+  };
+
+  private handlePowerUpdate = (power: number) => { this.powerText.setText(power.toString()); };
+
+  private initVisualGrid(offsetX: number, offsetY: number) {
     for (let r = 0; r < GRID_SIZE; r++) {
       this.visualGrid[r] = [];
       for (let c = 0; c < GRID_SIZE; c++) {
-        this.spawnCell(r, c, this.logic.grid[r][c]!.shape);
+        const cellX  = offsetX + c * CELL_SIZE + CELL_SIZE / 2;
+        const cellY  = offsetY + r * CELL_SIZE + CELL_SIZE / 2;
+        const cellBg = this.add.circle(cellX, cellY, CELL_SIZE * 0.4, 0xffffff, 0.03);
+        cellBg.setBlendMode(Phaser.BlendModes.ADD);
+        const logicCell = this.logic.grid[r][c]!;
+        this.spawnVisualCell(r, c, offsetX, offsetY, logicCell.shape);
       }
     }
   }
 
-  private buildTextPool() {
-    for (let i = 0; i < this.POOL_SIZE; i++) {
-      const t = this.add.text(0, 0, '', {
-        fontSize: '18px', fontFamily: 'monospace', color: '#ffffff',
-        fontStyle: 'bold', stroke: '#000000', strokeThickness: 3
-      }).setOrigin(0.5).setDepth(20).setVisible(false);
-      this.textPool.push({ obj: t, free: true });
-    }
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // HUD — full-width top (opponent) + bottom (player) strips
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  private buildHUD() {
-    const W = this.gameWidth, sf = this.scaleFactor;
-    const cm = CombatManager.getInstance();
-    const user = cm.user!, opp = cm.opponent!;
-
-    // Shared layout constants — defined ONCE and reused in both strips so
-    // spacing is pixel-perfect identical between opponent and player HUDs.
-    const pad  = Math.floor(14 * sf);   // left/top inset for name/label text
-    const barH = Math.floor(14 * sf);   // height of every progress bar
-    const barX = Math.floor(W * 0.30);  // left edge of all bars
-    const barW = Math.floor(W * 0.52);  // width of all bars (ends at ~82 % of W)
-    // Row-advance: label-text height + bar height + gap below bar
-    const rowAdv = this.fs(14) + barH + Math.floor(6 * sf);
-
-    // FIX: use a fixed display size for gem icons so the size is consistent
-    // across all screen sizes.  setScale(1.8*sf) on a CELL_SIZE-pixel texture
-    // produces icons ranging from 24 px on phones to 185 px on desktop.
-    const gemIconSz = Math.floor(38 * sf);
-
-    // ── TOP STRIP (Opponent) ──────────────────────────────────────────────────
-    this.topHUD = this.add.container(0, 0);
-    const topBg = this.add.graphics();
-    topBg.fillStyle(0x000000, 0.70);
-    topBg.fillRect(0, 0, W, this.topHudH);
-    topBg.lineStyle(1, 0xef4444, 0.25);
-    topBg.lineBetween(0, this.topHudH, W, this.topHudH);
-    this.topHUD.add(topBg);
-
-    this.oppGlow = this.add.graphics(); this.oppGlow.setAlpha(0);
-    this.topHUD.add(this.oppGlow);
-
-    // Opponent name + class (left side)
-    this.topHUD.add(this.add.text(pad, pad, opp.name.toUpperCase(), {
-      fontFamily: 'monospace', fontSize: `${this.fs(22)}px`,
-      fontStyle: 'bold', color: '#f87171'
-    }));
-    this.topHUD.add(this.add.text(pad, pad + this.fs(26), opp.classType, {
-      fontFamily: 'monospace', fontSize: `${this.fs(14)}px`, color: '#888'
-    }));
-
-    // FIX: gem icon — setDisplaySize for consistent HUD icon size.
-    // FIX: gem Y — vertically centre in the top strip (topHudH/2) to match
-    //             the visual weight of the bars on the right.
-    this.topHUD.add(
-      this.add.image(Math.floor(W * 0.24), Math.floor(this.topHudH / 2), `shape_${opp.linkedGem}`)
-        .setDisplaySize(gemIconSz, gemIconSz).setOrigin(0.5)
-    );
-
-    // Opponent HP bar
-    const oppHpGfx = this.add.graphics();
-    const oppHpLabelY = pad;
-    const oppHpBarY   = oppHpLabelY + this.fs(14);   // label height → bar starts here
-    this.topHUD.add(this.add.text(barX, oppHpLabelY, 'HP',
-      { fontFamily:'monospace', fontSize:`${this.fs(12)}px`, color:'#aaa' }));
-    this.oppHpTxt = this.add.text(barX + barW, oppHpLabelY, `${opp.currentHp}/${opp.maxHp}`,
-      { fontFamily:'monospace', fontSize:`${this.fs(12)}px`, color:'#ccc' }).setOrigin(1, 0);
-    this.topHUD.add([oppHpGfx, this.oppHpTxt]);
-    // FIX: store barY consistently derived from oppHpLabelY (no magic offset)
-    this.bars.oppHp = { gfx: oppHpGfx, pct: -1, color: 0xef4444, w: barW, y: oppHpBarY };
-
-    // Opponent Charge bar
-    const oppChGfx = this.add.graphics();
-    // FIX: use rowAdv (= fs(14)+barH+6sf) for both HUDs — previously opponent
-    //      used barH (14sf) but player used 16sf, producing different row heights.
-    const oppChLabelY = oppHpLabelY + rowAdv;
-    const oppChBarY   = oppChLabelY + this.fs(14);
-    // FIX: removed the inconsistent -2sf offset on charge labels
-    this.topHUD.add(this.add.text(barX, oppChLabelY, 'CHARGE',
-      { fontFamily:'monospace', fontSize:`${this.fs(12)}px`, color:'#aaa' }));
-    this.oppChTxt = this.add.text(barX + barW, oppChLabelY, `${opp.currentCharge}/${opp.maxCharge}`,
-      { fontFamily:'monospace', fontSize:`${this.fs(12)}px`, color:'#ccc' }).setOrigin(1, 0);
-    this.topHUD.add([oppChGfx, this.oppChTxt]);
-    this.bars.oppCharge = { gfx: oppChGfx, pct: -1, color: 0xeab308, w: barW, y: oppChBarY };
-
-    this.redrawBar('oppHp',     opp.currentHp    / opp.maxHp,    barX, sf);
-    this.redrawBar('oppCharge', opp.currentCharge / opp.maxCharge, barX, sf);
-
-    // Opponent queued icons — anchor at right-side with enough room for icons
-    // FIX: moved anchor left so icons don't bleed past the screen edge when
-    //      multiple skills are queued (each icon ~22sf wide + spacing)
-    this.oppQueuedIcons = this.add.container(W - Math.floor(70 * sf), Math.floor(this.topHudH / 2));
-    this.topHUD.add(this.oppQueuedIcons);
-
-    // ── BOTTOM STRIP (Player) ─────────────────────────────────────────────────
-    const botY = this.gameHeight - this.botHudH;
-    this.bottomHUD = this.add.container(0, botY);
-
-    const botBg = this.add.graphics();
-    botBg.fillStyle(0x000000, 0.75);
-    botBg.fillRect(0, 0, W, this.botHudH);
-    botBg.lineStyle(1, 0x10b981, 0.25);
-    botBg.lineBetween(0, 0, W, 0);
-    this.bottomHUD.add(botBg);
-
-    this.userGlow = this.add.graphics(); this.userGlow.setAlpha(0);
-    this.bottomHUD.add(this.userGlow);
-
-    // Player name + class (left side)
-    this.bottomHUD.add(this.add.text(pad, pad, user.name.toUpperCase(), {
-      fontFamily: 'monospace', fontSize: `${this.fs(22)}px`,
-      fontStyle: 'bold', color: '#34d399'
-    }));
-    this.bottomHUD.add(this.add.text(pad, pad + this.fs(26), user.classType, {
-      fontFamily: 'monospace', fontSize: `${this.fs(14)}px`, color: '#888'
-    }));
-
-    // FIX: gem icon — setDisplaySize; Y centred on the info-area (name+bars)
-    //      which spans ~0 to rowAdv*2+barH ≈ 76sf → centre ≈ 38sf.
-    //      Previously used uPad + fs(22)/2 ≈ 23sf (near top), while the
-    //      opponent gem was at topHudH/2 (properly centred).
-    const gemInfoCentreY = Math.floor((pad * 2 + rowAdv * 2 + barH) / 2);
-    this.bottomHUD.add(
-      this.add.image(Math.floor(W * 0.24), gemInfoCentreY, `shape_${user.linkedGem}`)
-        .setDisplaySize(gemIconSz, gemIconSz).setOrigin(0.5)
-    );
-
-    // Player HP bar — same Y formula as opponent strip
-    const userHpGfx = this.add.graphics();
-    const userHpLabelY = pad;
-    const userHpBarY   = userHpLabelY + this.fs(14);
-    this.bottomHUD.add(this.add.text(barX, userHpLabelY, 'HP',
-      { fontFamily:'monospace', fontSize:`${this.fs(12)}px`, color:'#aaa' }));
-    this.userHpTxt = this.add.text(barX + barW, userHpLabelY, `${user.currentHp}/${user.maxHp}`,
-      { fontFamily:'monospace', fontSize:`${this.fs(12)}px`, color:'#ccc' }).setOrigin(1, 0);
-    this.bottomHUD.add([userHpGfx, this.userHpTxt]);
-    this.bars.userHp = { gfx: userHpGfx, pct: -1, color: 0x10b981, w: barW, y: userHpBarY };
-
-    // Player Charge bar — FIX: use same rowAdv as opponent (was 16sf, now barH+fs14+6sf)
-    const userChGfx = this.add.graphics();
-    const userChLabelY = userHpLabelY + rowAdv;
-    const userChBarY   = userChLabelY + this.fs(14);
-    // FIX: removed -2sf offset (was inconsistent with HP label)
-    this.bottomHUD.add(this.add.text(barX, userChLabelY, 'CHARGE',
-      { fontFamily:'monospace', fontSize:`${this.fs(12)}px`, color:'#aaa' }));
-    this.userChTxt = this.add.text(barX + barW, userChLabelY, `${user.currentCharge}/${user.maxCharge}`,
-      { fontFamily:'monospace', fontSize:`${this.fs(12)}px`, color:'#ccc' }).setOrigin(1, 0);
-    this.bottomHUD.add([userChGfx, this.userChTxt]);
-    this.bars.userCharge = { gfx: userChGfx, pct: -1, color: 0x3b82f6, w: barW, y: userChBarY };
-
-    this.redrawBar('userHp',     user.currentHp    / user.maxHp,    barX, sf);
-    this.redrawBar('userCharge', user.currentCharge / user.maxCharge, barX, sf);
-
-    // Stack skill buttons (bottom strip, right side)
-    this.buildSkillButtons(user, sf);
-
-    // FIX: player queued icons — was at botHudH-16sf (≈194sf) which sat directly
-    //      on top of the skill buttons at ≈168–200sf.  Place them in the gap
-    //      between the charge bar bottom and the skill buttons.
-    const btnH       = Math.floor(32 * sf);
-    const btnsTop    = this.botHudH - btnH - Math.floor(10 * sf);  // ≈ 168sf
-    const barsBottom = userChBarY + barH;                           // ≈ 76sf
-    const queuedY    = Math.floor((barsBottom + btnsTop) / 2);      // midpoint
-    this.queuedIcons = this.add.container(Math.floor(W / 2), queuedY);
-    this.bottomHUD.add(this.queuedIcons);
-
-    // ── MID overlay: Power + Turn (top-right corner) ──────────────────────────
-    this.midHUD = this.add.container(0, 0);
-    const mPad = Math.floor(10 * sf);
-    const mW   = Math.floor(160 * sf), mH = Math.floor(56 * sf);
-    const mX   = W - mW - mPad, mY = this.topHudH + mPad;
-
-    const midBg = this.add.graphics();
-    midBg.fillStyle(0x000000, 0.55); midBg.fillRoundedRect(mX, mY, mW, mH, 10*sf);
-    midBg.lineStyle(1, 0xffffff, 0.08); midBg.strokeRoundedRect(mX, mY, mW, mH, 10*sf);
-    this.midHUD.add(midBg);
-
-    this.midHUD.add(this.add.text(mX + 10*sf, mY + 8*sf, 'POWER', {
-      fontFamily:'monospace', fontSize:`${this.fs(11)}px`, color:'#888'
-    }));
-    this.powerTxt = this.add.text(mX + 10*sf, mY + 22*sf, '0', {
-      fontFamily:'monospace', fontSize:`${this.fs(20)}px`, fontStyle:'bold', color:'#fbbf24'
-    });
-    this.midHUD.add(this.powerTxt);
-
-    this.midHUD.add(this.add.text(mX + mW*0.6, mY + 8*sf, 'TURN', {
-      fontFamily:'monospace', fontSize:`${this.fs(11)}px`, color:'#888'
-    }));
-    this.turnTxt = this.add.text(mX + mW*0.6, mY + 22*sf, '1', {
-      fontFamily:'monospace', fontSize:`${this.fs(20)}px`, fontStyle:'bold', color:'#3b82f6'
-    });
-    this.midHUD.add(this.turnTxt);
-
-    // Active skill button (bottom-right, floating on grid edge)
-    this.buildActiveSkillBtn(user, sf);
-
-    // Skill queue listeners
-    this.registerQueueListeners(sf);
-
-    // Apply initial turn glow
-    this.onTurnSwitched(cm.currentTurn);
-  }
-
-  private buildSkillButtons(user: any, sf: number) {
-    const stacks = user.loadout.stacks as string[];
-    if (!stacks.length) return;
-
-    const W      = this.gameWidth;
-    const pad    = Math.floor(8 * sf);
-    const btnH   = Math.floor(32 * sf);
-    const total  = stacks.length;
-    const btnW   = Math.min(Math.floor((W * 0.60 - (total-1)*pad) / total), Math.floor(130*sf));
-    const startX = W - Math.floor(8*sf) - total * btnW - (total-1)*pad;
-    const btnY   = Math.floor(this.botHudH - btnH - Math.floor(10*sf));
-
-    stacks.forEach((skillId, i) => {
-      const x = startX + i * (btnW + pad);
-      const btn = this.add.container(x, btnY);
-      btn.setData('skillId', skillId);
-
-      const bg = this.add.graphics();
-      bg.fillStyle(0xffffff, 0.08); bg.fillRoundedRect(0, 0, btnW, btnH, 6*sf);
-      btn.add(bg);
-
-      const skill = CombatRegistry.getInstance().getSkill(skillId);
-      if (skill) {
-        const ico = this.add.image(Math.floor(10*sf), Math.floor(btnH/2), skill.icon)
-          .setDisplaySize(20*sf, 20*sf).setOrigin(0, 0.5);
-        const nm  = this.add.text(Math.floor(34*sf), Math.floor(btnH/2),
-          skill.name.length > 10 ? skill.name.substring(0,9)+'…' : skill.name,
-          { fontFamily:'monospace', fontSize:`${this.fs(9)}px`, color:'#ddd' }).setOrigin(0, 0.5);
-        const cost = this.add.text(btnW - Math.floor(6*sf), Math.floor(btnH/2),
-          `${skill.chargeCost}`,
-          { fontFamily:'monospace', fontSize:`${this.fs(9)}px`, color:'#fbbf24', fontStyle:'bold' })
-          .setOrigin(1, 0.5);
-        btn.add([ico, nm, cost]);
-      }
-
-      btn.setInteractive(new Phaser.Geom.Rectangle(0, 0, btnW, btnH), Phaser.Geom.Rectangle.Contains);
-      btn.on('pointerup', (ptr: Phaser.Input.Pointer) => {
-        if (Phaser.Math.Distance.Between(ptr.downX, ptr.downY, ptr.upX, ptr.upY) > 10) return;
-        const cm = CombatManager.getInstance(), u = cm.user;
-        const sk = CombatRegistry.getInstance().getSkill(skillId);
-        if (u && sk && u.currentCharge >= sk.chargeCost && cm.currentTurn === 'USER')
-          this.game.events.emit('SKILL_ACTIVATED', { character:'USER', skillId, moveScore:0, comboNumber:1, powerSurge:this.powerSurge });
-        else {
-          this.tweens.add({ targets: btn, x: x + 4*sf, duration: 40, yoyo: true, repeat: 2 });
-        }
-      });
-
-      this.bottomHUD.add(btn);
-      this.skillButtons.push(btn);
-    });
-  }
-
-  private buildActiveSkillBtn(user: any, sf: number) {
-    if (!user.loadout.active) return;
-    const skillId = user.loadout.active;
-    const skill   = CombatRegistry.getInstance().getSkill(skillId);
-    const r       = Math.floor(44 * sf);
-    const x       = this.gameWidth - r - Math.floor(12*sf);
-    const y       = this.gridOffY + GRID_PX - r - Math.floor(8*sf);
-
-    this.activeSkillBtn = this.add.container(x, y);
-    const bg = this.add.graphics();
-    bg.fillStyle(0x000000, 0.85); bg.fillCircle(0, 0, r);
-    bg.lineStyle(2, 0x10b981, 1); bg.strokeCircle(0, 0, r);
-    this.activeSkillBtn.add(bg);
-
-    this.activeSkillBtn.add(this.add.text(0, -Math.floor(12*sf), '⚡',
-      { fontSize: `${this.fs(24)}px` }).setOrigin(0.5));
-    this.activeSkillBtn.add(this.add.text(0, Math.floor(12*sf),
-      skill ? `${skill.chargeCost}EP` : '',
-      { fontFamily:'monospace', fontSize:`${this.fs(11)}px`, color:'#3b82f6' }).setOrigin(0.5));
-
-    this.activeSkillBtn.setInteractive(new Phaser.Geom.Circle(0, 0, r), Phaser.Geom.Circle.Contains);
-    this.activeSkillBtn.on('pointerdown', () => {
-      SoundManager.getInstance().play(SoundType.CLICK);
-      const cm = CombatManager.getInstance(), u = cm.user;
-      if (u && skill && u.currentCharge >= skill.chargeCost && cm.currentTurn === 'USER')
-        this.game.events.emit('SKILL_ACTIVATED', { character:'USER', skillId, powerSurge: this.powerSurge });
-    });
-  }
-
-  private registerQueueListeners(sf: number) {
-    this.game.events.on('SKILL_QUEUED', (data: any) => {
-      const ct = data.character === 'USER' ? this.queuedIcons : this.oppQueuedIcons;
-      const sz = data.character === 'USER' ? Math.floor(32*sf) : Math.floor(22*sf);
-      const ico = this.add.image(0, 0, data.icon).setDisplaySize(sz, sz).setData('skillId', data.skillId);
-      if (data.character === 'USER') {
-        ico.setInteractive({ useHandCursor: true });
-        ico.on('pointerdown', () => CombatManager.getInstance().removeQueuedSkill(data.skillId, 'USER'));
-      }
-      ct.add(ico);
-      const sp = sz + Math.floor(4*sf);
-      ct.getAll().forEach((c, i) => {
-        (c as Phaser.GameObjects.Image).x = (i - (ct.length-1)/2) * sp;
-      });
-      if (data.character === 'USER') {
-        const btn = this.skillButtons.find(b => b.getData('skillId') === data.skillId);
-        if (btn) btn.setVisible(false);
-      }
-    });
-
-    this.game.events.on('SKILL_DEACTIVATED', (data: any) => {
-      const ct = data.character === 'USER' ? this.queuedIcons : this.oppQueuedIcons;
-      const sp = data.character === 'USER' ? Math.floor(36*sf) : Math.floor(26*sf);
-      const ico = ct.getAll().find((c: any) =>
-        (data.skillId && c.getData('skillId') === data.skillId) || c.texture?.key === data.icon
-      );
-      if (ico) {
-        const sid = (ico as any).getData?.('skillId');
-        ct.remove(ico as any, true);
-        ct.getAll().forEach((c, i) => { (c as Phaser.GameObjects.Image).x = (i - (ct.length-1)/2) * sp; });
-        if (data.character === 'USER' && sid) {
-          const btn = this.skillButtons.find(b => b.getData('skillId') === sid);
-          if (btn) btn.setVisible(true);
-        }
-      }
-    });
-  }
-
-  // ── Bar drawing (dirty-flag: only redraw when pct actually changes) ─────────
-  private redrawBar(key: keyof typeof this.bars, pct: number, barX: number, sf: number) {
-    const b = this.bars[key];
-    const p = Math.max(0, Math.min(1, pct));
-    if (Math.abs(p - b.pct) < 0.002) return;   // no visible change
-    b.pct = p;
-    const bH = Math.floor(14 * sf); // FIX: match layout barH constant (was 13sf)
-    const r  = Math.floor(5 * sf);
-    b.gfx.clear();
-    b.gfx.fillStyle(0x000000, 0.45);
-    b.gfx.fillRoundedRect(barX, b.y, b.w, bH, r);
-    if (p > 0) {
-      b.gfx.fillStyle(b.color, 1);
-      b.gfx.fillRoundedRect(barX, b.y, Math.max(r*2, b.w * p), bH, r);
-    }
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Combat listeners
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  private listenCombat() {
-    const ev = this.game.events;
-    ev.on('HP_UPDATED',     this.onHpUpdated,     this);
-    ev.on('CHARGE_UPDATED', this.onChargeUpdated, this);
-    ev.on('POWER_UPDATE',   this.onPowerUpdate,   this);
-    ev.on('TURN_SWITCHED',  this.onTurnSwitched,  this);
-    ev.on('SKILL_EXECUTED', this.onSkillExecuted, this);
-    ev.on('SKILL_MISSED',   this.onSkillMissed,   this);
-    ev.on('GAME_OVER',      this.onGameOver,      this);
-  }
-
-  private readonly SF = () => this.scaleFactor;
-
-  private onHpUpdated = (d: any) => {
-    const isUser = d.character === 'USER';
-    const barKey = isUser ? 'userHp' : 'oppHp';
-    const sf = this.SF(), barX = Math.floor(this.gameWidth * 0.30);
-    this.redrawBar(barKey, d.hp / d.maxHp, barX, sf);
-    const txt = isUser ? this.userHpTxt : this.oppHpTxt;
-    if (txt) txt.setText(`${Math.floor(d.hp)}/${d.maxHp}`);
-  };
-
-  private onChargeUpdated = (d: any) => {
-    const isUser = d.character === 'USER';
-    const key = isUser ? 'userCharge' : 'oppCharge';
-    const sf = this.SF(), barX = Math.floor(this.gameWidth * 0.30);
-    this.redrawBar(key, d.charge / d.maxCharge, barX, sf);
-    const txt = isUser ? this.userChTxt : this.oppChTxt;
-    if (txt) txt.setText(`${Math.floor(d.charge)}/${d.maxCharge}`);
-  };
-
-  private onPowerUpdate = (p: number) => { if (this.powerTxt) this.powerTxt.setText(String(p)); };
-
-  private onTurnSwitched = (turn: string) => {
-    const cm = CombatManager.getInstance();
-    if (this.turnTxt) this.turnTxt.setText(String(cm.turnCount));
-    const uA = turn === 'USER'     ? 1 : 0;
-    const oA = turn === 'OPPONENT' ? 1 : 0;
-    if (this.userGlow) this.tweens.add({ targets: this.userGlow, alpha: uA, duration: 280 });
-    if (this.oppGlow)  this.tweens.add({ targets: this.oppGlow,  alpha: oA, duration: 280 });
-
-    // Draw glow outlines
-    const drawGlow = (gfx: Phaser.GameObjects.Graphics, W: number, H: number, color: number) => {
-      gfx.clear();
-      for (let i = 1; i <= 6; i++) {
-        gfx.lineStyle(i * 2 * this.scaleFactor, color, 0.12 / i);
-        gfx.strokeRect(-i*this.scaleFactor, -i*this.scaleFactor, W + i*2*this.scaleFactor, H + i*2*this.scaleFactor);
-      }
-    };
-    if (this.userGlow) drawGlow(this.userGlow, this.gameWidth, this.botHudH, 0x10b981);
-    if (this.oppGlow)  drawGlow(this.oppGlow,  this.gameWidth, this.topHudH, 0xef4444);
-  };
-
-  private onSkillExecuted = (d: any) => {
-    const isUser = d.character === 'USER';
-    const x = this.gameWidth / 2;
-    const y = isUser ? this.gameHeight - this.botHudH - Math.floor(80 * this.scaleFactor)
-                     : this.topHudH + Math.floor(80 * this.scaleFactor);
-    const t = this.add.text(x, y, d.skill.name.toUpperCase(), {
-      fontFamily: 'monospace', fontSize: `${this.fs(36)}px`, fontStyle: 'bold',
-      color: isUser ? '#10b981' : '#ef4444', stroke: '#000', strokeThickness: 5
-    }).setOrigin(0.5).setAlpha(0).setScale(0.6).setDepth(30);
-    this.tweens.chain({ targets: t, tweens: [
-      { alpha: 1, scale: 1.1, duration: 240, ease: 'Back.easeOut' },
-      { alpha: 0, y: y - 50*this.scaleFactor, duration: 420, delay: 400, ease: 'Power2', onComplete: () => t.destroy() }
-    ]});
-  };
-
-  private onSkillMissed = (d: any) => {
-    const isUser = d.character === 'USER';
-    const x = this.gameWidth / 2;
-    const y = isUser ? this.gameHeight - this.botHudH - Math.floor(60*this.scaleFactor)
-                     : this.topHudH + Math.floor(60*this.scaleFactor);
-    const t = this.add.text(x, y, 'MISSED!', {
-      fontFamily: 'monospace', fontSize: `${this.fs(32)}px`, fontStyle: 'bold',
-      color: '#ef4444', stroke: '#000', strokeThickness: 4
-    }).setOrigin(0.5).setDepth(30);
-    this.tweens.add({ targets: t, y: y - 80*this.scaleFactor, alpha: 0, duration: 900,
-                      ease: 'Cubic.easeOut', onComplete: () => t.destroy() });
-  };
-
-  private onGameOver = (d: { winner: string }) => {
-    if (this.isGameOver) return;
-    this.isGameOver = true; this.isProcessing = true;
-    const win = d.winner === 'USER';
-    const W = this.gameWidth, H = this.gameHeight, sf = this.scaleFactor;
-
-    const ov = this.add.rectangle(0, 0, W, H, 0x000000, 0.72).setOrigin(0).setDepth(100).setInteractive();
-    const title = this.add.text(W/2, H/2 - 60*sf, win ? 'VICTORY!' : 'DEFEAT...',{
-      fontFamily:'monospace', fontSize:`${this.fs(72)}px`, fontStyle:'bold',
-      color: win ? '#10b981' : '#ef4444', stroke:'#fff', strokeThickness: 7*sf
-    }).setOrigin(0.5).setScale(0).setDepth(101);
-
-    const power = this.add.text(W/2, H/2 + 40*sf, `Final Power: ${this.powerSurge}`,{
-      fontFamily:'monospace', fontSize:`${this.fs(26)}px`, color:'#fff'
-    }).setOrigin(0.5).setAlpha(0).setDepth(101);
-
-    const restartCt = this.add.container(W/2, H/2 + 130*sf).setDepth(101).setAlpha(0);
-    const rb = this.add.rectangle(0,0,200*sf,56*sf,0xffffff,0.18).setStrokeStyle(2*sf,0xffffff);
-    const rt = this.add.text(0,0,'RESTART',{fontFamily:'monospace',fontSize:`${this.fs(22)}px`,fontStyle:'bold',color:'#fff'}).setOrigin(0.5);
-    restartCt.add([rb, rt]);
-    restartCt.setSize(200*sf, 56*sf); restartCt.setInteractive({useHandCursor:true});
-    restartCt.on('pointerover', () => rb.setFillStyle(0xffffff,0.38));
-    restartCt.on('pointerout',  () => rb.setFillStyle(0xffffff,0.18));
-    restartCt.on('pointerdown', () => this.scene.restart());
-
-    this.tweens.add({ targets: title, scale: 1, duration: 750, ease: 'Back.easeOut' });
-    this.tweens.add({ targets: [power, restartCt], alpha: 1, duration: 420, delay: 700 });
-  };
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Grid helpers
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  private spawnCell(r: number, c: number, shape: ShapeType): VisualCell {
-    const x = this.gridOffX + c * CELL_SIZE + CELL_SIZE / 2;
-    const y = this.gridOffY + r * CELL_SIZE + CELL_SIZE / 2;
-    const ct = this.add.container(x, y);
-    ct.add(this.add.sprite(0, 0, `shape_${shape}`));
-    ct.setSize(CELL_SIZE, CELL_SIZE);
-    this.visualGrid[r][c] = { sprite: ct };
-    return this.visualGrid[r][c]!;
-  }
-
-  private cellWorldPos(r: number, c: number) {
-    return {
-      x: this.gridOffX + c * CELL_SIZE + CELL_SIZE / 2,
-      y: this.gridOffY + r * CELL_SIZE + CELL_SIZE / 2,
-    };
+  private spawnVisualCell(r: number, c: number, offsetX: number, offsetY: number, shape: ShapeType) {
+    const x         = offsetX + c * CELL_SIZE + CELL_SIZE / 2;
+    const y         = offsetY + r * CELL_SIZE + CELL_SIZE / 2;
+    const container = this.add.container(x, y);
+    const sprite    = this.add.sprite(0, 0, `shape_${shape}`);
+    container.add(sprite);
+    container.setSize(CELL_SIZE, CELL_SIZE);
+    this.visualGrid[r][c] = { sprite: container };
+    return this.visualGrid[r][c];
   }
 
   public updateSelectionRect(r: number, c: number) {
-    if (this.isProcessing || CombatManager.getInstance().currentTurn !== 'USER') return;
-    const vc = this.visualGrid[r][c];
-    if (vc) { this.selectionRect.setPosition(vc.sprite.x, vc.sprite.y).setVisible(true); }
+    if (this.isProcessing) return;
+    if (CombatManager.getInstance().currentTurn !== 'USER') return;
+    const cell = this.visualGrid[r][c];
+    if (cell) {
+      this.selectionRect.setPosition(cell.sprite.x, cell.sprite.y);
+      this.selectionRect.setVisible(true);
+    }
   }
 
-  private setSpecialOverlay(r: number, c: number, type: SpecialType) {
-    const lc = this.logic.grid[r][c], vc = this.visualGrid[r][c];
-    if (!lc || !vc) return;
-    lc.special = type;
-    const ov = this.add.sprite(0, 0, `special_${type}`);
-    if (type !== SpecialType.PARASITE) ov.setBlendMode(Phaser.BlendModes.ADD);
-    ov.setAlpha(0.9);
-    vc.sprite.add(ov);
-    this.tweens.add({ targets: ov, scale: 1.12, alpha: 1, duration: 550, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+  public async swapCells(r1: number, c1: number, r2: number, c2: number) {
+    /*
+     * CRITICAL FIX — try / finally
+     * ─────────────────────────────
+     * The original code set isProcessing = false only at the end of the happy
+     * path.  Any exception thrown inside the async body (network error, Phaser
+     * object already destroyed, etc.) would leave isProcessing permanently true
+     * and make the board unresponsive forever.
+     *
+     * The finally block guarantees the flag and the GIM block are always cleared.
+     */
+    if (this.isProcessing) return;
+    this.isProcessing = true;
+    GlobalInputManager.getInstance().block();
+
+    try {
+      const vCell1 = this.visualGrid[r1][c1];
+      const vCell2 = this.visualGrid[r2][c2];
+      const lCell1 = this.logic.grid[r1][c1];
+      const lCell2 = this.logic.grid[r2][c2];
+
+      if (!vCell1 || !vCell2 || !lCell1 || !lCell2) return;
+
+      await Promise.all([
+        this.animateMove(vCell1.sprite, vCell2.sprite.x, vCell2.sprite.y),
+        this.animateMove(vCell2.sprite, vCell1.sprite.x, vCell1.sprite.y)
+      ]);
+
+      this.logic.swap(r1, c1, r2, c2);
+      this.visualGrid[r1][c1] = vCell2;
+      this.visualGrid[r2][c2] = vCell1;
+
+      const newCell1 = this.logic.grid[r1][c1]!;
+      const newCell2 = this.logic.grid[r2][c2]!;
+
+      if (newCell1.special === SpecialType.PARASITE || newCell2.special === SpecialType.PARASITE) {
+        const parasite = newCell1.special === SpecialType.PARASITE ? newCell1 : newCell2;
+        const other    = newCell1.special === SpecialType.PARASITE ? newCell2 : newCell1;
+        await this.effectManager.handleParasiteCombination(parasite, other, r2, c2);
+        await this.processBoard();
+        CombatManager.getInstance().switchTurn();
+        return;
+      }
+
+      if (newCell1.special !== SpecialType.NONE && newCell2.special !== SpecialType.NONE) {
+        await this.effectManager.handleSpecialCombination(newCell1, newCell2, r2, c2);
+        await this.processBoard();
+        CombatManager.getInstance().switchTurn();
+        return;
+      }
+
+      let matches = this.logic.findMatches();
+
+      if (matches.length === 0) {
+        await Promise.all([
+          this.animateMove(vCell1.sprite, vCell2.sprite.x, vCell2.sprite.y),
+          this.animateMove(vCell2.sprite, vCell1.sprite.x, vCell1.sprite.y)
+        ]);
+        this.logic.swap(r1, c1, r2, c2);
+        this.visualGrid[r1][c1] = vCell1;
+        this.visualGrid[r2][c2] = vCell2;
+      } else {
+        matches.forEach(m => {
+          if (m.specialCreation) {
+            const inMatch2 = m.cells.some(c => c.r === r2 && c.c === c2);
+            const inMatch1 = m.cells.some(c => c.r === r1 && c.c === c1);
+            if (inMatch2) { m.specialCreation.r = r2; m.specialCreation.c = c2; }
+            else if (inMatch1) { m.specialCreation.r = r1; m.specialCreation.c = c1; }
+          }
+        });
+        await this.processBoard(true, matches);
+        CombatManager.getInstance().switchTurn();
+      }
+    } catch (err) {
+      console.error('[Game_Scene] swapCells error:', err);
+    } finally {
+      this.isProcessing = false;
+      GlobalInputManager.getInstance().unblock();
+    }
   }
 
-  // ─── Floating score text (pooled) ──────────────────────────────────────────
-  private spawnFloatText(x: number, y: number, msg: string) {
-    const slot = this.textPool.find(p => p.free);
-    if (!slot) return;
-    slot.free = false;
-    slot.obj.setText(msg).setPosition(x, y).setAlpha(1).setVisible(true);
-    this.tweens.add({
-      targets: slot.obj, y: y - 38, alpha: 0, duration: 700, ease: 'Power2',
-      onComplete: () => { slot.obj.setVisible(false); slot.free = true; }
+  private animateMove(obj: Phaser.GameObjects.Container, x: number, y: number, ease = 'Power2') {
+    return new Promise<void>(resolve => {
+      const emitter = this.add.particles(0, 0, 'particle', {
+        speed: { min: 10, max: 30 }, scale: { start: 0.5, end: 0 }, alpha: { start: 0.5, end: 0 },
+        lifespan: 300, blendMode: 'ADD', tint: 0xffffff
+      });
+      emitter.startFollow(obj);
+      this.tweens.add({
+        targets: obj, x, y, duration: 250, ease,
+        onComplete: () => { emitter.stop(); this.time.delayedCall(300, () => emitter.destroy()); resolve(); }
+      });
     });
+  }
+
+  private getOffsetX() { return this.getCenteredX(GRID_SIZE * CELL_SIZE); }
+  private getOffsetY() { return this.getCenteredY(GRID_SIZE * CELL_SIZE, -77 * this.scaleFactor); }
+
+  private setSpecial(r: number, c: number, type: SpecialType) {
+    const lCell = this.logic.grid[r][c];
+    const vCell = this.visualGrid[r][c];
+    if (lCell && vCell) {
+      lCell.special = type;
+      const overlay = this.add.sprite(0, 0, `special_${type}`);
+      if (type !== SpecialType.PARASITE) overlay.setBlendMode(Phaser.BlendModes.ADD);
+      overlay.setAlpha(0.9);
+      vCell.sprite.add(overlay);
+      this.tweens.add({ targets: overlay, scale: 1.15, alpha: 1, duration: 600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    }
   }
 
   private spawnParticles(x: number, y: number, color: number) {
-    const em = this.add.particles(x, y, 'particle', {
-      speed: { min: 40, max: 120 }, angle: { min: 0, max: 360 },
-      scale: { start: 0.9, end: 0 }, alpha: { start: 1, end: 0 },
-      tint: color, lifespan: 420, quantity: 7, emitting: false
+    const emitter = this.add.particles(x, y, 'particle', {
+      speed: { min: 50, max: 150 }, angle: { min: 0, max: 360 },
+      scale: { start: 1, end: 0 }, alpha: { start: 1, end: 0 },
+      tint: color, lifespan: 500, quantity: 10, emitting: false
     });
-    em.explode();
-    this.time.delayedCall(500, () => em.destroy());
+    emitter.explode();
+    this.time.delayedCall(600, () => emitter.destroy());
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Swap & Board Processing
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  public async swapCells(r1: number, c1: number, r2: number, c2: number) {
-    this.isProcessing = true;
-    const v1 = this.visualGrid[r1][c1], v2 = this.visualGrid[r2][c2];
-    const l1 = this.logic.grid[r1][c1], l2 = this.logic.grid[r2][c2];
-    if (!v1 || !v2 || !l1 || !l2) { this.isProcessing = false; return; }
-
-    await Promise.all([
-      this.animateMove(v1.sprite, v2.sprite.x, v2.sprite.y),
-      this.animateMove(v2.sprite, v1.sprite.x, v1.sprite.y),
-    ]);
-
-    this.logic.swap(r1, c1, r2, c2);
-    this.visualGrid[r1][c1] = v2;
-    this.visualGrid[r2][c2] = v1;
-
-    const n1 = this.logic.grid[r1][c1]!, n2 = this.logic.grid[r2][c2]!;
-
-    if (n1.special === SpecialType.PARASITE || n2.special === SpecialType.PARASITE) {
-      const par = n1.special === SpecialType.PARASITE ? n1 : n2;
-      const oth = n1.special === SpecialType.PARASITE ? n2 : n1;
-      await this.effectManager.handleParasiteCombination(par, oth, r2, c2);
-      await this.processBoard();
-      CombatManager.getInstance().switchTurn();
-      this.isProcessing = false;
-      return;
-    }
-
-    if (n1.special !== SpecialType.NONE && n2.special !== SpecialType.NONE) {
-      await this.effectManager.handleSpecialCombination(n1, n2, r2, c2);
-      await this.processBoard();
-      CombatManager.getInstance().switchTurn();
-      this.isProcessing = false;
-      return;
-    }
-
-    const matches = this.logic.findMatches();
-    if (!matches.length) {
-      // Revert
-      await Promise.all([
-        this.animateMove(v1.sprite, v2.sprite.x, v2.sprite.y),
-        this.animateMove(v2.sprite, v1.sprite.x, v1.sprite.y),
-      ]);
-      this.logic.swap(r1, c1, r2, c2);
-      this.visualGrid[r1][c1] = v1;
-      this.visualGrid[r2][c2] = v2;
-    } else {
-      // Pin special-creation target to the swapped-to cell
-      matches.forEach(m => {
-        if (!m.specialCreation) return;
-        if (m.cells.some(p => p.r === r2 && p.c === c2))      { m.specialCreation.r = r2; m.specialCreation.c = c2; }
-        else if (m.cells.some(p => p.r === r1 && p.c === c1)) { m.specialCreation.r = r1; m.specialCreation.c = c1; }
-      });
-      await this.processBoard(true, matches);
-      CombatManager.getInstance().switchTurn();
-    }
-    this.isProcessing = false;
+  private spawnFloatingText(x: number, y: number, text: string) {
+    const floatText = this.add.text(x, y, text, {
+      fontSize: '20px', fontFamily: 'monospace', color: '#ffffff', fontStyle: 'bold', stroke: '#000000', strokeThickness: 3
+    }).setOrigin(0.5);
+    this.tweens.add({ targets: floatText, y: y - 40, alpha: 0, duration: 800, ease: 'Power2', onComplete: () => floatText.destroy() });
   }
 
-  // ─── Smooth move (no particle trail — saves GPU bandwidth) ─────────────────
-  private animateMove(obj: Phaser.GameObjects.Container, x: number, y: number): Promise<void> {
-    return new Promise(res => this.tweens.add({
-      targets: obj, x, y, duration: 200, ease: 'Quad.easeOut', onComplete: () => res()
-    }));
-  }
+  private pendingSpecials: LogicCell[] = [];
 
-  // ─── Board processing ───────────────────────────────────────────────────────
-  private async processBoard(giveScore = true, initialMatches?: MatchResult[]) {
-    let matches = initialMatches ?? this.logic.findMatches();
-    const hasEmpty = () => this.logic.grid.some(row => row.some(c => c === null));
-    let combo = 1;
+  public destroyCell(r: number, c: number, isSpecial: boolean, spawnParticlesFlag = true, moveScore = 10, comboNumber = 1): Promise<void> {
+    return new Promise(resolve => {
+      const vCell = this.visualGrid[r][c];
+      const lCell = this.logic.grid[r][c];
 
-    while (matches.length || this.pendingSpecials.length || hasEmpty()) {
-      if (matches.length) {
-        SoundManager.getInstance().play(SoundType.MATCH);
-
-        const toDestroy = new Map<string, number>();   // "r,c" → score
-        const specials: { r:number; c:number; type:SpecialType; shape:ShapeType }[] = [];
-
-        for (const m of matches) {
-          if (m.specialCreation) specials.push(m.specialCreation);
-          for (const cell of m.cells) {
-            const k = `${cell.r},${cell.c}`;
-            toDestroy.set(k, Math.max(toDestroy.get(k) ?? 0, m.score));
-          }
+      if (vCell && lCell) {
+        if (isSpecial && lCell.special !== SpecialType.NONE) {
+          this.pendingSpecials.push({ ...lCell });
+          SoundManager.getInstance().play(SoundType.SPECIAL);
         }
 
-        const destroyPromises: Promise<void>[] = [];
-        const comboMult = Math.pow(1.1, combo - 1);
+        this.logic.grid[r][c]    = null;
+        this.visualGrid[r][c]    = null;
 
-        for (const [pos, baseScore] of toDestroy) {
-          const [r, c] = pos.split(',').map(Number);
-          const isSpecTarget = specials.some(s => s.r === r && s.c === c);
-          const ms = Math.round(baseScore * comboMult);
+        if (lCell.shape !== ShapeType.NONE) {
+          this.game.events.emit('GEMS_DESTROYED', { shape: lCell.shape, count: 1, moveScore, comboNumber, powerSurge: this.powerSurge });
+        }
+
+        const x = this.getOffsetX() + c * CELL_SIZE + CELL_SIZE / 2;
+        const y = this.getOffsetY() + r * CELL_SIZE + CELL_SIZE / 2;
+
+        if (spawnParticlesFlag) this.spawnParticles(x, y, this.colors[lCell.shape]);
+
+        this.tweens.add({
+          targets: vCell.sprite, scale: 1.2, duration: 50, yoyo: true,
+          onComplete: () => {
+            this.tweens.add({
+              targets: vCell.sprite, scale: 0, alpha: 0, duration: 150,
+              onComplete: () => { vCell.sprite.destroy(); resolve(); }
+            });
+          }
+        });
+      } else {
+        resolve();
+      }
+    });
+  }
+
+  private async processBoard(giveScore = true, initialMatches?: MatchResult[]) {
+    let matches     = initialMatches || this.logic.findMatches();
+    const hasEmpty  = () => this.logic.grid.some(row => row.some(cell => cell === null));
+    let comboNumber = 1;
+
+    while (matches.length > 0 || this.pendingSpecials.length > 0 || hasEmpty()) {
+      if (matches.length > 0) {
+        SoundManager.getInstance().play(SoundType.MATCH);
+        const toDestroy:      Map<string, number> = new Map();
+        const specialCreations: { r: number; c: number; type: SpecialType; shape: ShapeType }[] = [];
+
+        matches.forEach(match => {
+          if (match.specialCreation) specialCreations.push(match.specialCreation);
+          match.cells.forEach(m => {
+            const key = `${m.r},${m.c}`;
+            if (!toDestroy.has(key)) toDestroy.set(key, match.score);
+            else toDestroy.set(key, Math.max(toDestroy.get(key)!, match.score));
+          });
+        });
+
+        const destroyPromises: Promise<void>[] = [];
+
+        for (const [posStr, baseMatchScore] of toDestroy.entries()) {
+          const [r, c]      = posStr.split(',').map(Number);
+          const isSpecialTarget = specialCreations.some(sc => sc.r === r && sc.c === c);
+          const comboMultiplier = Math.pow(1.1, comboNumber - 1);
+          const matchScore  = Math.round(baseMatchScore * comboMultiplier);
 
           if (giveScore) {
-            this.powerSurge += ms;
-            const wp = this.cellWorldPos(r, c);
-            this.spawnFloatText(wp.x, wp.y, `+${ms}`);
+            this.powerSurge += matchScore;
+            const x = this.getOffsetX() + c * CELL_SIZE + CELL_SIZE / 2;
+            const y = this.getOffsetY() + r * CELL_SIZE + CELL_SIZE / 2;
+            this.spawnFloatingText(x, y, `+${matchScore}`);
           }
 
-          const lc = this.logic.grid[r][c];
-          if (lc && lc.shape !== ShapeType.NONE) {
-            if (isSpecTarget) {
-              this.game.events.emit('GEMS_DESTROYED', { shape: lc.shape, count: 1, moveScore: ms, comboNumber: combo, powerSurge: this.powerSurge });
-              if (lc.special !== SpecialType.NONE) this.pendingSpecials.push({ ...lc });
+          const lCell = this.logic.grid[r][c];
+          if (lCell && lCell.shape !== ShapeType.NONE) {
+            if (isSpecialTarget) {
+              this.game.events.emit('GEMS_DESTROYED', { shape: lCell.shape, count: 1, moveScore: matchScore, comboNumber, powerSurge: this.powerSurge });
+              if (lCell.special !== SpecialType.NONE) this.pendingSpecials.push({ ...lCell });
             } else {
-              destroyPromises.push(this.destroyCell(r, c, true, true, ms, combo));
+              destroyPromises.push(this.destroyCell(r, c, true, true, matchScore, comboNumber));
             }
           }
         }
-
         await Promise.all(destroyPromises);
 
-        // Materialise special gems
-        for (const sc of specials) {
-          const lc = this.logic.grid[sc.r][sc.c], vc = this.visualGrid[sc.r][sc.c];
-          if (!vc || !lc) {
+        specialCreations.forEach(sc => {
+          const lCell = this.logic.grid[sc.r][sc.c];
+          const vCell = this.visualGrid[sc.r][sc.c];
+
+          if (!vCell || !lCell) {
             this.logic.grid[sc.r][sc.c] = { r: sc.r, c: sc.c, shape: sc.shape, special: SpecialType.NONE };
-            this.spawnCell(sc.r, sc.c, sc.shape);
-          } else if (lc.shape !== sc.shape) {
-            lc.shape = sc.shape;
-            vc.sprite.destroy();
+            this.spawnVisualCell(sc.r, sc.c, this.getOffsetX(), this.getOffsetY(), sc.shape);
+          } else if (lCell.shape !== sc.shape) {
+            lCell.shape = sc.shape;
+            vCell.sprite.destroy();
             this.visualGrid[sc.r][sc.c] = null;
-            this.spawnCell(sc.r, sc.c, sc.shape);
+            this.spawnVisualCell(sc.r, sc.c, this.getOffsetX(), this.getOffsetY(), sc.shape);
           }
-          this.setSpecialOverlay(sc.r, sc.c, sc.type);
-        }
+
+          this.setSpecial(sc.r, sc.c, sc.type);
+        });
       }
 
-      // Drain special queue
-      while (this.pendingSpecials.length) {
-        await this.activateSpecialCell(this.pendingSpecials.shift()!);
+      while (this.pendingSpecials.length > 0) {
+        const specialCell = this.pendingSpecials.shift()!;
+        await this.activateSpecial(specialCell);
       }
 
       await this.fillGrid();
       matches = this.logic.findMatches();
-      if (matches.length) combo++;
+      if (matches.length > 0) comboNumber++;
     }
 
     this.game.events.emit('POWER_UPDATE', this.powerSurge);
-    if (!this.logic.hasPossibleMoves()) await this.shuffleBoard();
+
+    if (!this.logic.hasPossibleMoves()) {
+      console.log('No possible moves, shuffling board…');
+      await this.shuffleBoard();
+    }
   }
 
-  // ─── Cell destruction ───────────────────────────────────────────────────────
-  public destroyCell(r: number, c: number, isSpecial: boolean,
-                     spawnFx = true, moveScore = 10, combo = 1): Promise<void> {
-    return new Promise(res => {
-      const vc = this.visualGrid[r][c], lc = this.logic.grid[r][c];
-      if (!vc || !lc) { res(); return; }
+  public async shuffleBoard() {
+    const offsetX = this.getOffsetX();
+    const offsetY = this.getOffsetY();
 
-      if (isSpecial && lc.special !== SpecialType.NONE) {
-        this.pendingSpecials.push({ ...lc });
-        SoundManager.getInstance().play(SoundType.SPECIAL);
+    const destroyPromises: Promise<void>[] = [];
+    for (let r = 0; r < GRID_SIZE; r++) {
+      for (let c = 0; c < GRID_SIZE; c++) {
+        if (this.visualGrid[r][c]) {
+          const vCell = this.visualGrid[r][c]!;
+          destroyPromises.push(new Promise(resolve => {
+            this.tweens.add({ targets: vCell.sprite, scale: 0, alpha: 0, duration: 200, onComplete: () => { vCell.sprite.destroy(); resolve(); } });
+          }));
+          this.visualGrid[r][c] = null;
+        }
       }
+    }
+    await Promise.all(destroyPromises);
 
-      this.logic.grid[r][c]   = null;
-      this.visualGrid[r][c]   = null;
+    const updates = this.logic.shuffleBoard();
 
-      if (lc.shape !== ShapeType.NONE)
-        this.game.events.emit('GEMS_DESTROYED', { shape: lc.shape, count: 1, moveScore, comboNumber: combo, powerSurge: this.powerSurge });
+    const spawnPromises: Promise<void>[] = [];
+    updates.forEach(u => {
+      const vCell = this.spawnVisualCell(u.r, u.c, offsetX, offsetY, u.shape);
+      if (u.special !== SpecialType.NONE) this.setSpecial(u.r, u.c, u.special);
+      vCell.sprite.scale = 0;
+      vCell.sprite.alpha = 0;
+      spawnPromises.push(new Promise(resolve => {
+        this.tweens.add({ targets: vCell.sprite, scale: 1, alpha: 1, duration: 300, ease: 'Back.easeOut', onComplete: () => resolve() });
+      }));
+    });
+    await Promise.all(spawnPromises);
+  }
 
-      if (spawnFx) {
-        const { x, y } = this.cellWorldPos(r, c);
-        this.spawnParticles(x, y, this.colors[lc.shape] ?? 0xffffff);
-      }
+  private async fillGrid() {
+    const offsetX    = this.getOffsetX();
+    const offsetY    = this.getOffsetY();
+    const animations: Promise<void>[] = [];
+    const { drops, newCells } = this.logic.applyGravity();
 
+    drops.forEach(drop => {
+      const vCell = this.visualGrid[drop.r][drop.c]!;
+      this.visualGrid[drop.newR][drop.c] = vCell;
+      this.visualGrid[drop.r][drop.c]   = null;
+      animations.push(this.animateMove(vCell.sprite, offsetX + drop.c * CELL_SIZE + CELL_SIZE / 2, offsetY + drop.newR * CELL_SIZE + CELL_SIZE / 2, 'Bounce.easeOut'));
+    });
+
+    newCells.forEach(nc => {
+      const vCell = this.spawnVisualCell(nc.r, nc.c, offsetX, offsetY, nc.shape);
+      vCell.sprite.y -= GRID_SIZE * CELL_SIZE;
+      animations.push(this.animateMove(vCell.sprite, offsetX + nc.c * CELL_SIZE + CELL_SIZE / 2, offsetY + nc.r * CELL_SIZE + CELL_SIZE / 2, 'Bounce.easeOut'));
+    });
+
+    await Promise.all(animations);
+  }
+
+  private async activateSpecial(cell: LogicCell) { await this.effectManager.activateSpecial(cell); }
+
+  public playPulsarVisual(r: number, c: number, isHorizontal: boolean, isVertical: boolean, width: number): void {
+    const centerX     = this.getOffsetX() + c * CELL_SIZE + CELL_SIZE / 2;
+    const centerY     = this.getOffsetY() + r * CELL_SIZE + CELL_SIZE / 2;
+    const boardCenterX = this.getOffsetX() + GRID_SIZE * CELL_SIZE / 2;
+    const boardCenterY = this.getOffsetY() + GRID_SIZE * CELL_SIZE / 2;
+
+    if (isHorizontal) {
+      const hBeam = this.add.rectangle(boardCenterX, centerY, GRID_SIZE * CELL_SIZE, CELL_SIZE * width, 0x00ffff, 0.5);
+      hBeam.setBlendMode(Phaser.BlendModes.ADD);
+      this.tweens.add({ targets: hBeam, scaleY: 0, alpha: 0, duration: 400, onComplete: () => hBeam.destroy() });
+    }
+    if (isVertical) {
+      const vBeam = this.add.rectangle(centerX, boardCenterY, CELL_SIZE * width, GRID_SIZE * CELL_SIZE, 0xff00ff, 0.5);
+      vBeam.setBlendMode(Phaser.BlendModes.ADD);
+      this.tweens.add({ targets: vBeam, scaleX: 0, alpha: 0, duration: 400, onComplete: () => vBeam.destroy() });
+    }
+  }
+
+  public async playMissileVisual(r: number, c: number, targetR: number, targetC: number): Promise<void> {
+    const startX  = this.getOffsetX() + c       * CELL_SIZE + CELL_SIZE / 2;
+    const startY  = this.getOffsetY() + r       * CELL_SIZE + CELL_SIZE / 2;
+    const targetX = this.getOffsetX() + targetC * CELL_SIZE + CELL_SIZE / 2;
+    const targetY = this.getOffsetY() + targetR * CELL_SIZE + CELL_SIZE / 2;
+
+    const missile   = this.add.sprite(startX, startY, 'special_missile').setScale(0.5);
+    missile.setRotation(Phaser.Math.Angle.Between(startX, startY, targetX, targetY) + Math.PI / 2);
+
+    const particles = this.add.particles(0, 0, 'particle', {
+      speed: 50, scale: { start: 0.5, end: 0 }, alpha: { start: 1, end: 0 },
+      tint: 0xffaa00, lifespan: 300, follow: missile
+    });
+
+    return new Promise<void>(resolve => {
       this.tweens.add({
-        targets: vc.sprite, scale: 1.15, duration: 40, yoyo: true,
-        onComplete: () => this.tweens.add({
-          targets: vc.sprite, scale: 0, alpha: 0, duration: 120,
-          onComplete: () => { vc.sprite.destroy(); res(); }
-        })
+        targets: missile, x: targetX, y: targetY, duration: 400, ease: 'Cubic.easeIn',
+        onComplete: () => { particles.stop(); missile.destroy(); this.time.delayedCall(300, () => particles.destroy()); resolve(); }
       });
     });
   }
 
-  // ─── Fill (gravity) ─────────────────────────────────────────────────────────
-  private async fillGrid() {
-    const anim: Promise<void>[] = [];
-    const { drops, newCells } = this.logic.applyGravity();
-
-    drops.forEach(d => {
-      const vc = this.visualGrid[d.r][d.c]!;
-      this.visualGrid[d.newR][d.c] = vc;
-      this.visualGrid[d.r][d.c]   = null;
-      const { x, y } = this.cellWorldPos(d.newR, d.c);
-      anim.push(new Promise(res => this.tweens.add({
-        targets: vc.sprite, x, y, duration: 220, ease: 'Bounce.easeOut', onComplete: () => res()
-      })));
-    });
-
-    newCells.forEach(nc => {
-      const vc = this.spawnCell(nc.r, nc.c, nc.shape);
-      const { x, y } = this.cellWorldPos(nc.r, nc.c);
-      vc.sprite.y -= GRID_SIZE * CELL_SIZE;
-      anim.push(new Promise(res => this.tweens.add({
-        targets: vc.sprite, x, y, duration: 220, ease: 'Bounce.easeOut', onComplete: () => res()
-      })));
-    });
-
-    await Promise.all(anim);
-  }
-
-  // ─── Shuffle ────────────────────────────────────────────────────────────────
-  public async shuffleBoard() {
-    this.isProcessing = true;
-    const dp: Promise<void>[] = [];
-    for (let r = 0; r < GRID_SIZE; r++)
-      for (let c = 0; c < GRID_SIZE; c++)
-        if (this.visualGrid[r][c]) {
-          const vc = this.visualGrid[r][c]!;
-          dp.push(new Promise(res => this.tweens.add({ targets: vc.sprite, scale: 0, alpha: 0, duration: 180, onComplete: () => { vc.sprite.destroy(); res(); } })));
-          this.visualGrid[r][c] = null;
-        }
-    await Promise.all(dp);
-
-    const updates = this.logic.shuffleBoard();
-    const sp: Promise<void>[] = [];
-    updates.forEach(u => {
-      const vc = this.spawnCell(u.r, u.c, u.shape);
-      if (u.special !== SpecialType.NONE) this.setSpecialOverlay(u.r, u.c, u.special);
-      vc.sprite.scale = 0; vc.sprite.alpha = 0;
-      sp.push(new Promise(res => this.tweens.add({ targets: vc.sprite, scale: 1, alpha: 1, duration: 280, ease: 'Back.easeOut', onComplete: () => res() })));
-    });
-    await Promise.all(sp);
-    this.isProcessing = false;
-  }
-
-  private async activateSpecialCell(cell: LogicCell) {
-    await this.effectManager.activateSpecial(cell);
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // IEffectDelegate
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  public playPulsarVisual(r: number, c: number, isH: boolean, isV: boolean, w: number) {
-    const { x: cx, y: cy } = this.cellWorldPos(r, c);
-    const bcx = this.gridOffX + GRID_PX / 2, bcy = this.gridOffY + GRID_PX / 2;
-    if (isH) {
-      const b = this.add.rectangle(bcx, cy, GRID_PX, CELL_SIZE*w, 0x00ffff, 0.45).setBlendMode(Phaser.BlendModes.ADD);
-      this.tweens.add({ targets: b, scaleY: 0, alpha: 0, duration: 360, onComplete: () => b.destroy() });
-    }
-    if (isV) {
-      const b = this.add.rectangle(cx, bcy, CELL_SIZE*w, GRID_PX, 0xff00ff, 0.45).setBlendMode(Phaser.BlendModes.ADD);
-      this.tweens.add({ targets: b, scaleX: 0, alpha: 0, duration: 360, onComplete: () => b.destroy() });
-    }
-  }
-
-  public async playMissileVisual(r: number, c: number, tr: number, tc: number): Promise<void> {
-    const { x: sx, y: sy } = this.cellWorldPos(r, c);
-    const { x: tx, y: ty } = this.cellWorldPos(tr, tc);
-    const m = this.add.sprite(sx, sy, 'special_missile').setScale(0.45);
-    m.setRotation(Phaser.Math.Angle.Between(sx, sy, tx, ty) + Math.PI/2);
-    return new Promise(res => this.tweens.add({
-      targets: m, x: tx, y: ty, duration: 360, ease: 'Cubic.easeIn',
-      onComplete: () => { m.destroy(); res(); }
-    }));
-  }
-
-  public playBombVisual(r: number, c: number, radius: number) {
-    const { x, y } = this.cellWorldPos(r, c);
-    const e = this.add.circle(x, y, CELL_SIZE*0.5, 0xffaa00, 0.8).setBlendMode(Phaser.BlendModes.ADD);
-    this.tweens.add({ targets: e, scale: radius*2.4, alpha: 0, duration: 460, ease: 'Cubic.easeOut', onComplete: () => e.destroy() });
+  public playBombVisual(r: number, c: number, radius: number): void {
+    const centerX  = this.getOffsetX() + c * CELL_SIZE + CELL_SIZE / 2;
+    const centerY  = this.getOffsetY() + r * CELL_SIZE + CELL_SIZE / 2;
+    const explosion = this.add.circle(centerX, centerY, CELL_SIZE * 0.5, 0xffaa00, 0.8);
+    explosion.setBlendMode(Phaser.BlendModes.ADD);
+    this.tweens.add({ targets: explosion, scale: radius * 2.5, alpha: 0, duration: 500, ease: 'Cubic.easeOut', onComplete: () => explosion.destroy() });
   }
 
   public async playParasiteVortex(r: number, c: number, scale: number, duration: number): Promise<void> {
-    const { x, y } = this.cellWorldPos(r, c);
-    const v = this.add.sprite(x, y, 'special_parasite').setScale(0);
-    return new Promise(res => this.tweens.add({
-      targets: v, scale, angle: duration > 800 ? 1080 : 720, alpha: 0, duration,
-      ease: duration > 800 ? 'Cubic.easeIn' : 'Cubic.easeOut',
-      onComplete: () => { v.destroy(); res(); }
-    }));
+    const centerX = this.getOffsetX() + c * CELL_SIZE + CELL_SIZE / 2;
+    const centerY = this.getOffsetY() + r * CELL_SIZE + CELL_SIZE / 2;
+    const vortex  = this.add.sprite(centerX, centerY, 'special_parasite').setScale(0);
+    return new Promise<void>(resolve => {
+      this.tweens.add({
+        targets: vortex, scale, angle: duration > 800 ? 1080 : 720, alpha: 0, duration,
+        ease: duration > 800 ? 'Cubic.easeIn' : 'Cubic.easeOut',
+        onComplete: () => { vortex.destroy(); resolve(); }
+      });
+    });
   }
 
-  public async playParasiteVisual(r: number, c: number, _shape: ShapeType, targets: { r:number; c:number }[]): Promise<void> {
-    if (!targets.length) { await new Promise(res => this.time.delayedCall(360, res)); return; }
-    const { x: cx, y: cy } = this.cellWorldPos(r, c);
-    await Promise.all(targets.map(t => {
-      const { x: tx, y: ty } = this.cellWorldPos(t.r, t.c);
-      const beam = this.add.line(0, 0, cx, cy, tx, ty, 0xd946ef, 0.7).setOrigin(0).setLineWidth(3);
-      const pt   = this.add.sprite(cx, cy, 'particle').setTint(0xd946ef).setScale(2);
-      return new Promise<void>(res => this.tweens.add({
-        targets: pt, x: tx, y: ty, duration: 360, ease: 'Power2',
-        onComplete: () => { pt.destroy(); beam.destroy(); res(); }
-      }));
-    }));
+  public async playParasiteVisual(r: number, c: number, targetShape: ShapeType, targetCells: { r: number; c: number }[]): Promise<void> {
+    const centerX = this.getOffsetX() + c * CELL_SIZE + CELL_SIZE / 2;
+    const centerY = this.getOffsetY() + r * CELL_SIZE + CELL_SIZE / 2;
+    const promises = targetCells.map(cell => {
+      const targetX = this.getOffsetX() + cell.c * CELL_SIZE + CELL_SIZE / 2;
+      const targetY = this.getOffsetY() + cell.r * CELL_SIZE + CELL_SIZE / 2;
+      const beam    = this.add.line(0, 0, centerX, centerY, targetX, targetY, 0xd946ef, 0.8).setOrigin(0, 0).setLineWidth(4);
+      const particle = this.add.sprite(centerX, centerY, 'particle').setTint(0xd946ef).setScale(2);
+      return new Promise<void>(resolve => {
+        this.tweens.add({ targets: particle, x: targetX, y: targetY, duration: 400, ease: 'Power2', onComplete: () => { particle.destroy(); beam.destroy(); resolve(); } });
+      });
+    });
+    if (promises.length > 0) await Promise.all(promises);
+    else await new Promise(resolve => this.time.delayedCall(400, resolve));
   }
 
-  public shakeCamera(d: number, i: number) { this.cameras.main.shake(d, i); }
-  public getGridSize() { return this.logic.gridSize; }
-  public getGrid()     { return this.logic.grid; }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Shutdown
-  // ═══════════════════════════════════════════════════════════════════════════
+  public shakeCamera(duration: number, intensity: number): void { this.cameras.main.shake(duration, intensity); }
+  public getGridSize(): number { return this.logic.gridSize; }
+  public getGrid(): (LogicCell | null)[][] { return this.logic.grid; }
 
   shutdown() {
-    this.opponentAI?.destroy(); this.opponentAI = null;
-    const ev = this.game.events;
-    ['HP_UPDATED','CHARGE_UPDATED','POWER_UPDATE','TURN_SWITCHED',
-     'SKILL_EXECUTED','SKILL_MISSED','GAME_OVER','SKILL_QUEUED','SKILL_DEACTIVATED']
-    .forEach(e => ev.off(e, undefined, this));
+    /*
+     * Destroy the SwipeHandler BEFORE the scene's input plugin shuts down.
+     * This removes the three bound event listeners by exact reference, which
+     * is the only reliable way to clean them up in Phaser 3.
+     */
+    if (this.swipeHandler) {
+      this.swipeHandler.destroy();
+    }
+
+    if (this.opponentAI) {
+      this.opponentAI.destroy();
+      this.opponentAI = null;
+    }
+
+    // Unblock global input in case we're shutting down mid-processing
+    GlobalInputManager.getInstance().unblock();
+
+    this.game.events.off('HP_UPDATED',     this.handleHpUpdated,     this);
+    this.game.events.off('CHARGE_UPDATED', this.handleChargeUpdated, this);
+    this.game.events.off('POWER_UPDATE',   this.handlePowerUpdate,   this);
+    this.game.events.off('TURN_SWITCHED',  this.handleTurnSwitched,  this);
+    this.game.events.off('SKILL_EXECUTED', this.handleSkillExecuted, this);
+    this.game.events.off('SKILL_MISSED',   this.handleSkillMissed,   this);
+    this.game.events.off('GAME_OVER',      this.handleGameOver,      this);
   }
 }

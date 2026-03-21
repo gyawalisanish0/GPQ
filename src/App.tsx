@@ -1,27 +1,13 @@
-// ─── App.tsx ──────────────────────────────────────────────────────────────────
-// Bootstraps the Phaser game and, when VITE_EDITOR=true, also starts the
-// GenesisEditorScene in parallel with the normal game scenes.
-
 import React, { useEffect, useRef, useState } from 'react';
 import Phaser from 'phaser';
-import { GameConfig }      from './engine/GameConfig';
-import { Game_Scene }      from './scenes/Game_Scene';
-import { MainMenuScene }   from './scenes/MainMenuScene';
-import { LobbyScene }      from './scenes/LobbyScene';
-import { LoadoutScene }    from './scenes/LoadoutScene';
+import { GameConfig } from './engine/GameConfig';
+import { Game_Scene } from './scenes/Game_Scene';
+import { MainMenuScene } from './scenes/MainMenuScene';
+import { LobbyScene } from './scenes/LobbyScene';
+import { LoadoutScene } from './scenes/LoadoutScene';
 import { motion, AnimatePresence } from 'motion/react';
-import { GameState }       from './engine/GameState';
-import { CombatManager }   from './engine/CombatManager';
-import { GenesisEditorScene } from './editor/GenesisEditorScene';
-
-// ── Feature flag ──────────────────────────────────────────────────────────────
-// Add  VITE_EDITOR=true  to your .env.local to enable the editor.
-// In development mode (npm run dev) it is always enabled for convenience.
-const EDITOR_ENABLED: boolean =
-  import.meta.env['VITE_EDITOR'] === 'true' ||
-  import.meta.env.DEV === true;
-
-// ─────────────────────────────────────────────────────────────────────────────
+import { GameState } from './engine/GameState';
+import { CombatManager } from './engine/CombatManager';
 
 export default function App() {
   const gameRef = useRef<Phaser.Game | null>(null);
@@ -29,88 +15,82 @@ export default function App() {
 
   useEffect(() => {
     const initGame = async () => {
-      // Give the container a moment to render and size itself
-      await new Promise<void>(resolve => setTimeout(resolve, 200));
+      // Small delay to ensure the container is fully laid out
+      await new Promise(resolve => setTimeout(resolve, 100));
 
       const container = document.getElementById('game-container');
       if (!container) {
-        console.error('[App] game-container element not found');
+        console.error('Game container not found');
         return;
       }
 
-      // Wait up to 1 second for the container to have non-zero dimensions
-      for (let i = 0; i < 10; i++) {
-        if (container.clientWidth > 0 && container.clientHeight > 0) break;
-        await new Promise<void>(resolve => setTimeout(resolve, 100));
+      // Wait for a non-zero container size (important inside iframes / AI Studio)
+      let attempts = 0;
+      while ((container.clientWidth === 0 || container.clientHeight === 0) && attempts < 20) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attempts++;
       }
 
-      if (gameRef.current) return; // already initialized
-
-      const gameScenes = [MainMenuScene, LobbyScene, LoadoutScene, Game_Scene];
-
-      // Editor scene goes last so its overlay renders on top
-      const allScenes = EDITOR_ENABLED
-        ? [...gameScenes, GenesisEditorScene]
-        : gameScenes;
+      if (gameRef.current) return; // already initialised
 
       const config: Phaser.Types.Core.GameConfig = {
         ...GameConfig,
-        scene: allScenes,
-      };
-
-      const boot = (game: Phaser.Game) => {
-        gameRef.current = game;
-        GameState.getInstance().setGame(game);
-        CombatManager.getInstance().setGame(game);
-
-        game.events.once('SCENE_READY', () => {
-          setIsReady(true);
-
-          if (EDITOR_ENABLED) {
-            game.scene.start('GenesisEditorScene');
-            console.info(
-              '%c[GenesisEditor] Active — tap the red DEBUG pill to open/close the UI.',
-              'color:#ef4444;font-weight:bold'
-            );
-          }
-        });
+        scene: [MainMenuScene, LobbyScene, LoadoutScene, Game_Scene],
       };
 
       try {
-        boot(new Phaser.Game(config));
-      } catch (err) {
-        console.error('[App] Phaser init failed, retrying with CANVAS:', err);
-        boot(new Phaser.Game({ ...config, type: Phaser.CANVAS }));
+        const game = new Phaser.Game(config);
+        gameRef.current = game;
+
+        GameState.getInstance().setGame(game);
+        CombatManager.getInstance().setGame(game);
+
+        game.events.once('SCENE_READY', () => setIsReady(true));
+      } catch (error) {
+        console.error('Failed to initialise Phaser:', error);
       }
     };
 
-    void initGame();
+    initGame();
 
     return () => {
-      gameRef.current?.destroy(true);
-      gameRef.current = null;
-      document.getElementById('genesis-debug-pill')?.remove();
+      if (gameRef.current) {
+        gameRef.current.destroy(true);
+        gameRef.current = null;
+      }
     };
   }, []);
 
   return (
     <div className="relative w-full h-screen bg-neutral-900 overflow-hidden">
-      {/* Phaser canvas */}
+      {/* Phaser canvas lives here */}
       <div id="game-container" className="absolute inset-0" />
 
-      {/* Loading overlay */}
+      {/*
+       * Loading overlay.
+       *
+       * CRITICAL FIX — pointer-events: none
+       * ────────────────────────────────────
+       * Without this the overlay intercepts every touch / click even after its
+       * opacity reaches 0 during the exit animation, making the entire Phaser
+       * canvas unresponsive until AnimatePresence finally unmounts the element
+       * (~300 ms after the game is ready).  Setting pointer-events to none means
+       * the overlay is purely visual and never competes with Phaser for input.
+       */}
       <AnimatePresence>
         {!isReady && (
           <motion.div
             initial={{ opacity: 1 }}
             exit={{ opacity: 0 }}
+            transition={{ duration: 0.25 }}
+            style={{ pointerEvents: 'none' }}   /* ← the critical fix */
             className="absolute inset-0 z-50 flex items-center justify-center bg-neutral-900"
           >
             <div className="flex flex-col items-center gap-4">
               <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-              <p className="text-white font-mono text-sm tracking-widest uppercase opacity-50">
+              <div className="text-white font-mono text-sm tracking-widest uppercase opacity-50">
                 Initializing Engine…
-              </p>
+              </div>
             </div>
           </motion.div>
         )}
