@@ -8,46 +8,55 @@ import { LoadoutScene } from './scenes/LoadoutScene';
 import { motion, AnimatePresence } from 'motion/react';
 import { GameState } from './engine/GameState';
 import { CombatManager } from './engine/CombatManager';
+import DebugPanel from './components/DebugPanel';
 
 export default function App() {
-  const gameRef = useRef<Phaser.Game | null>(null);
-  const [isReady, setIsReady] = useState(false);
+  const gameRef          = useRef<Phaser.Game | null>(null);
+  const [isReady,  setIsReady ] = useState(false);
+  const [liveGame, setLiveGame] = useState<Phaser.Game | null>(null);
 
   useEffect(() => {
+    let game: Phaser.Game | null = null;
+
     const initGame = async () => {
-      // Small delay to ensure the container is fully laid out
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 200));
 
       const container = document.getElementById('game-container');
-      if (!container) {
-        console.error('Game container not found');
-        return;
-      }
+      if (!container) { console.error('Game container not found'); return; }
 
-      // Wait for a non-zero container size (important inside iframes / AI Studio)
       let attempts = 0;
-      while ((container.clientWidth === 0 || container.clientHeight === 0) && attempts < 20) {
+      while ((container.clientWidth === 0 || container.clientHeight === 0) && attempts < 10) {
         await new Promise(resolve => setTimeout(resolve, 100));
         attempts++;
       }
 
-      if (gameRef.current) return; // already initialised
+      if (!gameRef.current) {
+        const config = {
+          ...GameConfig,
+          scene: [MainMenuScene, LobbyScene, LoadoutScene, Game_Scene],
+        };
 
-      const config: Phaser.Types.Core.GameConfig = {
-        ...GameConfig,
-        scene: [MainMenuScene, LobbyScene, LoadoutScene, Game_Scene],
-      };
+        const launch = (cfg: typeof config) => {
+          game = new Phaser.Game(cfg);
+          gameRef.current = game;
+          GameState.getInstance().setGame(game);
+          CombatManager.getInstance().setGame(game);
+          game.events.once('SCENE_READY', () => {
+            setIsReady(true);
+            setLiveGame(game); // expose to DebugPanel
+          });
+        };
 
-      try {
-        const game = new Phaser.Game(config);
-        gameRef.current = game;
-
-        GameState.getInstance().setGame(game);
-        CombatManager.getInstance().setGame(game);
-
-        game.events.once('SCENE_READY', () => setIsReady(true));
-      } catch (error) {
-        console.error('Failed to initialise Phaser:', error);
+        try {
+          launch(config);
+        } catch (error) {
+          console.error('Failed to initialize Phaser:', error);
+          if (config.type !== Phaser.CANVAS) {
+            console.log('Retrying with CANVAS renderer...');
+            config.type = Phaser.CANVAS;
+            launch(config);
+          }
+        }
       }
     };
 
@@ -57,44 +66,38 @@ export default function App() {
       if (gameRef.current) {
         gameRef.current.destroy(true);
         gameRef.current = null;
+        setLiveGame(null);
       }
     };
   }, []);
 
   return (
     <div className="relative w-full h-screen bg-neutral-900 overflow-hidden">
-      {/* Phaser canvas lives here */}
+      {/* Phaser Canvas */}
       <div id="game-container" className="absolute inset-0" />
 
-      {/*
-       * Loading overlay.
-       *
-       * CRITICAL FIX — pointer-events: none
-       * ────────────────────────────────────
-       * Without this the overlay intercepts every touch / click even after its
-       * opacity reaches 0 during the exit animation, making the entire Phaser
-       * canvas unresponsive until AnimatePresence finally unmounts the element
-       * (~300 ms after the game is ready).  Setting pointer-events to none means
-       * the overlay is purely visual and never competes with Phaser for input.
-       */}
+      {/* lil-gui Debug Panel (press ` or F3 to toggle) */}
+      <DebugPanel game={liveGame} />
+
+      {/* Loading screen */}
       <AnimatePresence>
         {!isReady && (
           <motion.div
             initial={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.25 }}
-            style={{ pointerEvents: 'none' }}   /* ← the critical fix */
             className="absolute inset-0 z-50 flex items-center justify-center bg-neutral-900"
           >
             <div className="flex flex-col items-center gap-4">
               <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin" />
               <div className="text-white font-mono text-sm tracking-widest uppercase opacity-50">
-                Initializing Engine…
+                Initializing Engine...
               </div>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {isReady && <div />}
     </div>
   );
 }

@@ -2,315 +2,291 @@ import Phaser from 'phaser';
 import { CombatRegistry } from '../engine/CombatRegistry';
 import { CharacterData } from '../entities/Character';
 import { BaseScene } from './BaseScene';
-import { GlobalInputManager } from '../engine/GlobalInputManager';
+import { UITheme } from './UITheme';
 
+/**
+ * LobbyScene — Hero selection screen.
+ *
+ * Layout zones (1080×1920 design space):
+ *   ┌─────────────────────────────┐
+ *   │  [BACK]    SELECT HERO      │  ← Header row
+ *   │                             │
+ *   │   ┌────┐  ┌────┐  ┌────┐   │
+ *   │   │ ▓▓ │  │ ▓▓ │  │ ▓▓ │   │  ← Character cards (3-col grid)
+ *   │   │name│  │name│  │name│   │
+ *   │   │stat│  │stat│  │stat│   │
+ *   │   └────┘  └────┘  └────┘   │
+ *   │                             │
+ *   │                    [NEXT]   │  ← Footer nav
+ *   └─────────────────────────────┘
+ */
 export class LobbyScene extends BaseScene {
-    private characters: CharacterData[] = [];
-    private selectedCharId: string | null = null;
-    private charCards: Phaser.GameObjects.Container[] = [];
-    private uiContainer!: Phaser.GameObjects.Container;
 
-    constructor() {
-        super('LobbyScene');
-    }
+  private characters:    CharacterData[] = [];
+  private selectedCharId: string | null  = null;
+  private charCards:     Phaser.GameObjects.Container[] = [];
+  private uiContainer!:  Phaser.GameObjects.Container;
+  private nextBtn!:      Phaser.GameObjects.Container;
 
-    protected onInit(data: { selectedCharId?: string }) {
-        this.characters    = CombatRegistry.getInstance().getAllCharactersData();
-        this.charCards     = [];
-        this.selectedCharId = (data && data.selectedCharId) ? data.selectedCharId : null;
-    }
+  constructor() {
+    super('LobbyScene');
+  }
 
-    create() {
-        this.buildUI();
-    }
+  protected onInit(data: { selectedCharId?: string }) {
+    this.characters = CombatRegistry.getInstance().getAllCharactersData();
+    this.charCards  = [];
+    this.selectedCharId = data?.selectedCharId ?? null;
+  }
 
-    protected onResize() {
-        this.buildUI();
-    }
+  create() {
+    this.buildUI();
+  }
 
-    private buildUI() {
-        if (this.uiContainer) {
-            this.uiContainer.destroy();
+  protected onResize() {
+    this.buildUI();
+  }
+
+  /* ── Build ──────────────────────────────────────────────── */
+
+  private buildUI(): void {
+    if (this.uiContainer) this.uiContainer.destroy();
+    this.uiContainer = this.add.container(0, 0);
+    this.charCards = [];
+
+    const { colors, anim } = UITheme;
+
+    // ── Background ───────────────────────────────────────
+    this.createSceneBackground(this.uiContainer);
+
+    // ── Header ───────────────────────────────────────────
+    this.createHeader(this.uiContainer, 'SELECT YOUR HERO');
+
+    // ── Navigation Buttons ───────────────────────────────
+    const backBtn = this.createCompactButton(
+      this.s(100), this.s(50),
+      'BACK',
+      () => this.scene.start('MainMenuScene'),
+      colors.danger,
+    );
+    this.uiContainer.add(backBtn);
+
+    this.nextBtn = this.createCompactButton(
+      this.gameWidth - this.s(100), this.gameHeight - this.s(80),
+      'NEXT',
+      () => {
+        if (this.selectedCharId) {
+          this.scene.start('LoadoutScene', { charId: this.selectedCharId });
         }
-        this.uiContainer = this.add.container(0, 0);
-        this.charCards   = [];
+      },
+      colors.primary,
+    );
+    this.nextBtn.setVisible(this.selectedCharId !== null);
+    this.uiContainer.add(this.nextBtn);
 
-        // Background
-        const bg = this.add.image(this.centerX, this.centerY, 'menu_bg')
-            .setDisplaySize(this.gameWidth, this.gameHeight)
-            .setAlpha(0.3);
-        this.uiContainer.add(bg);
+    // ── Character Grid ───────────────────────────────────
+    this.buildCharacterGrid();
+  }
 
-        // Title
-        const title = this.add.text(this.centerX, 80 * this.scaleFactor, 'SELECT YOUR HERO', {
-            fontSize:    `${Math.floor(42 * this.scaleFactor)}px`,
-            fontFamily:  'monospace',
-            color:       '#10b981',
-            fontStyle:   'bold',
-        }).setOrigin(0.5);
-        this.uiContainer.add(title);
+  /* ── Character Grid ─────────────────────────────────────── */
 
-        this.createCharacterGrid();
+  private buildCharacterGrid(): void {
+    const { sizes, colors, font, anim, radius } = UITheme;
 
-        // Back Button
-        const backBtn = this.createButton(
-            100 * this.scaleFactor,
-            50  * this.scaleFactor,
-            'BACK',
-            () => { this.scene.start('MainMenuScene'); },
-            0xef4444,
-        );
-        this.uiContainer.add(backBtn);
+    const maxCols        = 3;
+    const baseCardW      = sizes.cardWidth;
+    const baseCardH      = sizes.cardHeight;
+    const baseSpacing    = sizes.cardSpacing;
+    const actualCols     = Math.min(maxCols, this.characters.length);
+    const totalBaseWidth = actualCols * baseCardW + (actualCols - 1) * baseSpacing;
 
-        // Next Button — hidden until a character is selected
-        const nextBtn = this.createButton(
-            this.gameWidth  - 100 * this.scaleFactor,
-            this.gameHeight -  80 * this.scaleFactor,
-            'NEXT',
-            () => {
-                if (this.selectedCharId) {
-                    this.scene.start('LoadoutScene', { charId: this.selectedCharId });
-                }
-            },
-            0x10b981,
-        );
-        nextBtn.setVisible(this.selectedCharId !== null);
-        this.data.set('nextBtn', nextBtn);
-        this.uiContainer.add(nextBtn);
+    // Scale cards to fit 80% of screen width
+    const maxAvailW = this.gameWidth * 0.8;
+    let cardScale   = this.scaleFactor;
+    if (totalBaseWidth * this.scaleFactor > maxAvailW) {
+      cardScale = maxAvailW / totalBaseWidth;
     }
 
-    private createCharacterGrid() {
-        const maxCols        = 3;
-        const baseCardWidth  = 240;
-        const baseCardHeight = 320;
-        const baseSpacing    = 40;
+    const sw = baseCardW  * cardScale;
+    const sh = baseCardH  * cardScale;
+    const ss = baseSpacing * cardScale;
 
-        const actualCols    = Math.min(maxCols, this.characters.length);
-        const totalBaseWidth = actualCols * baseCardWidth + (actualCols - 1) * baseSpacing;
+    const totalW = actualCols * sw + (actualCols - 1) * ss;
+    const startX = (this.gameWidth - totalW) / 2 + sw / 2;
+    const startY = this.gameHeight * 0.4;
 
-        // Scale down so cards fit within 80 % of the screen width
-        const maxAvailableWidth = this.gameWidth * 0.8;
-        let scale = this.scaleFactor;
-        if (totalBaseWidth * scale > maxAvailableWidth) {
-            scale = maxAvailableWidth / totalBaseWidth;
-        }
+    this.characters.forEach((char, i) => {
+      const col = i % maxCols;
+      const row = Math.floor(i / maxCols);
+      const x   = startX + col * (sw + ss);
+      const y   = startY + row * (sh + ss);
 
-        const scaledCardW   = baseCardWidth  * scale;
-        const scaledCardH   = baseCardHeight * scale;
-        const scaledSpacing = baseSpacing    * scale;
-        const totalScaledW  = actualCols * scaledCardW + (actualCols - 1) * scaledSpacing;
+      const card = this.createCharacterCard(char, baseCardW, baseCardH, cardScale);
+      card.setPosition(x, y);
+      this.charCards.push(card);
+      this.uiContainer.add(card);
 
-        const startX = (this.gameWidth - totalScaledW) / 2 + scaledCardW / 2;
-        const startY = this.gameHeight * 0.4;
+      // Staggered entrance
+      this.animateEntrance(card, 200 + i * anim.stagger);
 
-        const gim = GlobalInputManager.getInstance();
+      // Pre-select if returning from LoadoutScene
+      if (this.selectedCharId === char.id) {
+        this.applySelectedStyle(card, cardScale);
+      }
+    });
+  }
 
-        this.characters.forEach((char, i) => {
-            const col = i % maxCols;
-            const row = Math.floor(i / maxCols);
+  /* ── Character Card Factory ─────────────────────────────── */
 
-            const x = startX + col  * (scaledCardW + scaledSpacing);
-            const y = startY + row  * (scaledCardH + scaledSpacing);
+  private createCharacterCard(
+    char: CharacterData,
+    baseW: number, baseH: number,
+    cardScale: number,
+  ): Phaser.GameObjects.Container {
+    const { colors, font, radius } = UITheme;
 
-            const card = this.add.container(x, y);
-            card.setScale(scale);
-            card.setData('baseScale', scale);
-            card.setAlpha(0);
-            card.y += 50;    // offset for entry tween
+    const card = this.add.container(0, 0);
+    card.setScale(cardScale);
+    card.setData('baseScale', cardScale);
+    card.setData('charId', char.id);
 
-            // ── Card background ────────────────────────────────────────────
-            const cardBg = this.add.rectangle(
-                0, 0,
-                baseCardWidth, baseCardHeight,
-                0x1a1a1a, 1,
-            ).setStrokeStyle(2, 0x333333);
+    // ── Card background
+    const bg = this.add.rectangle(0, 0, baseW, baseH, colors.bgCard, 1)
+      .setStrokeStyle(2, colors.border)
+      .setInteractive({ useHandCursor: true });
 
-            const glowRect = this.add.rectangle(
-                0, 0,
-                baseCardWidth, baseCardHeight,
-                0x10b981, 0,
-            ).setStrokeStyle(4, 0x10b981);
+    // ── Selection glow
+    const glow = this.add.rectangle(0, 0, baseW + 8, baseH + 8, colors.primary, 0);
 
-            // ── Portrait ───────────────────────────────────────────────────
-            const portrait = this.add.image(0, -40, char.portrait)
-                .setDisplaySize(baseCardWidth - 20, 180);
+    // ── Portrait
+    const portraitKey = `char_${char.id}`;
+    const portrait = this.textures.exists(portraitKey)
+      ? this.add.image(0, -baseH * 0.15, portraitKey)
+          .setDisplaySize(baseW * 0.5, baseW * 0.5)
+      : this.add.circle(0, -baseH * 0.15, baseW * 0.2, colors.accent, 0.3)
+          .setStrokeStyle(2, colors.accent);
 
-            const maskShape = this.make.graphics({ x: 0, y: 0 });
-            maskShape.fillStyle(0xffffff);
-            maskShape.fillRoundedRect(
-                x - (scaledCardW - 20 * scale) / 2,
-                y - 40 * scale - 90 * scale,
-                scaledCardW - 20 * scale,
-                180 * scale,
-                10 * scale,
-            );
-            portrait.setMask(maskShape.createGeometryMask());
+    // ── Name
+    const name = this.add.text(0, baseH * 0.15, char.name.toUpperCase(), {
+      fontSize:   font.size(20, 1),
+      fontFamily: font.family,
+      fontStyle:  'bold',
+      color:      colors.textPrimary,
+    }).setOrigin(0.5);
 
-            // ── Labels ─────────────────────────────────────────────────────
-            const nameText = this.add.text(0, 60, char.name.toUpperCase(), {
-                fontSize:   '24px',
-                fontFamily: 'monospace',
-                color:      '#ffffff',
-                fontStyle:  'bold',
-            }).setOrigin(0.5);
+    // ── Class label
+    const classLabel = this.add.text(0, baseH * 0.22, char.characterClass?.toUpperCase() ?? '', {
+      fontSize:   font.size(14, 1),
+      fontFamily: font.family,
+      color:      colors.textAccent,
+    }).setOrigin(0.5);
 
-            const classText = this.add.text(0, 85, char.classType, {
-                fontSize:   '14px',
-                fontFamily: 'monospace',
-                color:      '#10b981',
-            }).setOrigin(0.5);
+    // ── Mini stat row
+    const stats = [
+      { label: 'STR', value: char.stats.strength },
+      { label: 'END', value: char.stats.endurance },
+      { label: 'PWR', value: char.stats.power },
+    ];
+    const statsContainer = this.add.container(-60, baseH * 0.30);
+    stats.forEach((s, j) => {
+      const sx = j * 65;
+      statsContainer.add(this.add.text(sx, 0, `${s.label}:`, {
+        fontSize: font.size(11, 1), fontFamily: font.family, color: colors.textMuted,
+      }));
+      statsContainer.add(this.add.text(sx + 25, 0, s.value.toString(), {
+        fontSize: font.size(11, 1), fontFamily: font.family, fontStyle: 'bold', color: colors.textPrimary,
+      }));
+    });
+    const stats2 = [
+      { label: 'RES', value: char.stats.resistance },
+      { label: 'SPD', value: char.stats.speed },
+      { label: 'ACC', value: char.stats.accuracy },
+    ];
+    stats2.forEach((s, j) => {
+      const sx = j * 65;
+      statsContainer.add(this.add.text(sx, 20, `${s.label}:`, {
+        fontSize: font.size(11, 1), fontFamily: font.family, color: colors.textMuted,
+      }));
+      statsContainer.add(this.add.text(sx + 25, 20, s.value.toString(), {
+        fontSize: font.size(11, 1), fontFamily: font.family, fontStyle: 'bold', color: colors.textPrimary,
+      }));
+    });
 
-            // ── Stats ──────────────────────────────────────────────────────
-            const statsContainer = this.add.container(-100, 105);
-            const statStyle = { fontSize: '10px', fontFamily: 'monospace', color: '#aaaaaa' };
-            const valStyle  = { fontSize: '10px', fontFamily: 'monospace', color: '#ffffff', fontStyle: 'bold' };
+    card.add([bg, glow, portrait, name, classLabel, statsContainer]);
 
-            [
-                { label: 'STR', val: char.stats.strength,   x:   0, y:  0 },
-                { label: 'END', val: char.stats.endurance,  x:  65, y:  0 },
-                { label: 'PWR', val: char.stats.power,      x: 130, y:  0 },
-                { label: 'RES', val: char.stats.resistance, x:   0, y: 20 },
-                { label: 'SPD', val: char.stats.speed,      x:  65, y: 20 },
-                { label: 'ACC', val: char.stats.accuracy,   x: 130, y: 20 },
-            ].forEach(s => {
-                statsContainer.add(this.add.text(s.x,      s.y, `${s.label}:`, statStyle));
-                statsContainer.add(this.add.text(s.x + 25, s.y,  s.val.toString(), valStyle));
-            });
+    // ── Interaction
+    bg.on('pointerover', () => {
+      if (this.selectedCharId !== char.id) {
+        bg.setStrokeStyle(2, colors.primary);
+        this.tweens.add({ targets: card, scale: cardScale * 1.05, duration: 200 });
+        this.tweens.add({ targets: glow, alpha: 0.3, duration: 200 });
+      }
+    });
 
-            card.add([cardBg, glowRect, portrait, nameText, classText, statsContainer]);
-            this.charCards.push(card);
-            this.uiContainer.add(card);
+    bg.on('pointerout', () => {
+      if (this.selectedCharId !== char.id) {
+        bg.setStrokeStyle(2, colors.border);
+        this.tweens.add({ targets: card, scale: cardScale, duration: 200 });
+        this.tweens.add({ targets: glow, alpha: 0, duration: 200 });
+      }
+    });
 
-            // ── Entry animation ────────────────────────────────────────────
-            this.tweens.add({
-                targets:  card,
-                alpha:    1,
-                y,
-                duration: 600,
-                delay:    200 + i * 150,
-                ease:     'Back.easeOut',
-            });
+    bg.on('pointerdown', () => {
+      this.selectCharacter(char.id);
+    });
 
-            // ── Input: hover (desktop) ─────────────────────────────────────
-            // cardBg must be interactive for hover AND as the tap target
-            cardBg.setInteractive({ useHandCursor: true });
+    return card;
+  }
 
-            cardBg.on('pointerover', () => {
-                if (this.selectedCharId !== char.id) {
-                    cardBg.setStrokeStyle(2, 0x10b981);
-                    this.tweens.add({ targets: card, scale: scale * 1.05, duration: 200 });
-                    this.tweens.add({ targets: glowRect, alpha: 0.3, duration: 200 });
-                }
-            });
+  /* ── Selection Logic ────────────────────────────────────── */
 
-            cardBg.on('pointerout', () => {
-                if (this.selectedCharId !== char.id) {
-                    cardBg.setStrokeStyle(2, 0x333333);
-                    this.tweens.add({ targets: card, scale, duration: 200 });
-                    this.tweens.add({ targets: glowRect, alpha: 0, duration: 200 });
-                }
-            });
+  private selectCharacter(id: string): void {
+    const { colors } = UITheme;
+    this.selectedCharId = id;
 
-            // ── Input: tap / click (touch-safe via GlobalInputManager) ─────
-            // makeTappable fires callback only when the pointer hasn't dragged
-            // more than 12 CSS px — prevents accidental selection while scrolling.
-            gim.makeTappable(cardBg, () => {
-                this.selectCharacter(char.id, card, cardBg, glowRect);
-            });
+    // Reset all cards to default
+    this.charCards.forEach(card => {
+      const baseScale = card.getData('baseScale') || 1;
+      const bg   = card.list[0] as Phaser.GameObjects.Rectangle;
+      const glow = card.list[1] as Phaser.GameObjects.Rectangle;
+      if (bg?.setStrokeStyle) {
+        bg.setStrokeStyle(2, colors.border);
+        bg.setFillStyle(colors.bgCard, 1);
+      }
+      if (glow?.setAlpha) glow.setAlpha(0);
+      this.tweens.add({ targets: card, scale: baseScale, duration: 200 });
+    });
 
-            // ── Pre-select if returning from LoadoutScene ──────────────────
-            if (this.selectedCharId === char.id) {
-                cardBg.setStrokeStyle(4, 0x10b981);
-                cardBg.setFillStyle(0x10b981, 0.1);
-                glowRect.setAlpha(0.5);
-                card.setScale(scale * 1.05);
-            }
-        });
+    // Apply selected style to the chosen card
+    const selected = this.charCards.find(c => c.getData('charId') === id);
+    if (selected) {
+      const baseScale = selected.getData('baseScale') || 1;
+      this.applySelectedStyle(selected, baseScale);
     }
 
-    private selectCharacter(
-        id:       string,
-        card:     Phaser.GameObjects.Container,
-        bg:       Phaser.GameObjects.Rectangle,
-        glow:     Phaser.GameObjects.Rectangle,
-    ) {
-        this.selectedCharId = id;
-
-        // Reset all cards to deselected appearance
-        this.charCards.forEach(c => {
-            const baseScale = c.getData('baseScale') || 1;
-            const otherBg   = c.list[0] as Phaser.GameObjects.Rectangle;
-            const otherGlow = c.list[1] as Phaser.GameObjects.Rectangle;
-
-            if (otherBg && otherBg !== bg) {
-                otherBg.setStrokeStyle(2, 0x333333);
-                otherBg.setFillStyle(0x1a1a1a, 1);
-                if (otherGlow?.setAlpha) otherGlow.setAlpha(0);
-                this.tweens.add({ targets: c, scale: baseScale, duration: 200 });
-            }
-        });
-
-        // Highlight selected card
-        const baseScale = card.getData('baseScale') || 1;
-        bg.setStrokeStyle(4, 0x10b981);
-        bg.setFillStyle(0x10b981, 0.1);
-        glow.setAlpha(0.5);
-        this.tweens.add({ targets: card, scale: baseScale * 1.05, duration: 200 });
-
-        // Reveal the "NEXT" button if not already visible
-        const nextBtn = this.data.get('nextBtn') as Phaser.GameObjects.Container;
-        if (nextBtn && !nextBtn.visible) {
-            nextBtn.setVisible(true);
-            nextBtn.setAlpha(0);
-            this.tweens.add({
-                targets:  nextBtn,
-                alpha:    1,
-                y:        { from: nextBtn.y + 20, to: nextBtn.y },
-                duration: 400,
-                ease:     'Back.easeOut',
-            });
-        }
+    // Reveal NEXT button
+    if (this.nextBtn && !this.nextBtn.visible) {
+      this.nextBtn.setVisible(true);
+      this.nextBtn.setAlpha(0);
+      this.tweens.add({
+        targets: this.nextBtn,
+        alpha: 1,
+        y: { from: this.nextBtn.y + 20, to: this.nextBtn.y },
+        duration: 400,
+        ease: UITheme.anim.ease.back,
+      });
     }
+  }
 
-    /**
-     * Create a simple rectangular button.
-     * Uses pointerup + distance guard (via GlobalInputManager.makeTappable)
-     * so the callback fires reliably on both touch and mouse without triggering
-     * during a scroll drag.
-     */
-    private createButton(
-        x:        number,
-        y:        number,
-        label:    string,
-        callback: () => void,
-        color:    number,
-    ): Phaser.GameObjects.Container {
-        const gim       = GlobalInputManager.getInstance();
-        const container = this.add.container(x, y);
+  private applySelectedStyle(card: Phaser.GameObjects.Container, baseScale: number): void {
+    const { colors } = UITheme;
+    const bg   = card.list[0] as Phaser.GameObjects.Rectangle;
+    const glow = card.list[1] as Phaser.GameObjects.Rectangle;
 
-        const btnBg = this.add.rectangle(
-            0, 0,
-            160 * this.scaleFactor,
-             50 * this.scaleFactor,
-            color, 0.8,
-        ).setInteractive({ useHandCursor: true });
-
-        const text = this.add.text(0, 0, label, {
-            fontSize:   `${Math.floor(18 * this.scaleFactor)}px`,
-            fontFamily: 'monospace',
-            color:      '#ffffff',
-            fontStyle:  'bold',
-        }).setOrigin(0.5);
-
-        container.add([btnBg, text]);
-
-        // Hover (desktop)
-        btnBg.on('pointerover', () => btnBg.setAlpha(1));
-        btnBg.on('pointerout',  () => btnBg.setAlpha(0.8));
-
-        // Touch-safe tap
-        gim.makeTappable(btnBg, callback);
-
-        return container;
+    if (bg?.setStrokeStyle) {
+      bg.setStrokeStyle(4, colors.borderActive);
+      bg.setFillStyle(colors.primary, 0.1);
     }
+    if (glow?.setAlpha) glow.setAlpha(0.5);
+    this.tweens.add({ targets: card, scale: baseScale * 1.05, duration: 200 });
+  }
 }
