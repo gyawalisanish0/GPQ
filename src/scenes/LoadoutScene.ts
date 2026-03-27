@@ -6,26 +6,15 @@ import { BaseScene } from './BaseScene';
 import { UITheme } from './UITheme';
 
 /**
- * LoadoutScene — Skill loadout configuration before battle.
+ * LoadoutScene — Premium skill loadout configuration.
  *
- * Layout (landscape-friendly two-pane):
- *   ┌──────────────┬───────────────────────────────┐
- *   │  [BACK]      │                               │
- *   │              │   LOADOUT CONFIGURATION        │
- *   │  ┌────────┐  │                               │
- *   │  │portrait│  │   ── Equipped Slots ──        │
- *   │  └────────┘  │   [Passive] [Active]          │
- *   │  HERO NAME   │   [Stack1] [Stack2] [Stack3]  │
- *   │  Class       │                               │
- *   │              │   ── Active Skills ──          │
- *   │  STR:12      │   ┌─────┐ ┌─────┐ ┌─────┐    │
- *   │  END:8       │   │skill│ │skill│ │skill│    │
- *   │  PWR:6       │   └─────┘ └─────┘ └─────┘    │
- *   │              │                               │
- *   │              │   ── Stack Skills ──           │
- *   │              │   ┌─────┐ ┌─────┐             │
- *   │              │   │skill│ │skill│  [BATTLE]   │
- *   └──────────────┴───────────────────────────────┘
+ * Pro-level design:
+ *   • Glass-panel two-pane layout with blue-tinted depth
+ *   • Character preview with ring portrait, stat bars, and equipped summary
+ *   • Scrollable skill grid with color-coded glass cards
+ *   • Equipped badge with glow animation
+ *   • Smooth inertial scrolling with touch support
+ *   • Section headers with decorative separators
  */
 export class LoadoutScene extends BaseScene {
 
@@ -110,62 +99,83 @@ export class LoadoutScene extends BaseScene {
 
     // ── Background
     this.createSceneBackground(this.uiContainer);
+    this.createAmbientParticles(this.uiContainer);
 
     // ── Two-pane layout
-    const totalWidth = Math.min(this.gameWidth * 0.95, this.s(1000));
-    const leftRatio  = 0.3;
+    const totalWidth = Math.min(this.gameWidth * 0.95, this.s(1020));
+    const leftRatio  = 0.30;
     const leftWidth  = totalWidth * leftRatio;
     const rightWidth = totalWidth * (1 - leftRatio);
+    const gapWidth   = this.s(12);
     const offsetX    = (this.gameWidth - totalWidth) / 2;
     const paneHeight = this.gameHeight * 0.78;
     const topMargin  = (this.gameHeight - paneHeight) / 2;
 
     this.leftPane  = this.add.container(offsetX, 0);
-    this.rightPane = this.add.container(offsetX + leftWidth, 0);
+    this.rightPane = this.add.container(offsetX + leftWidth + gapWidth, 0);
     this.uiContainer.add([this.leftPane, this.rightPane]);
 
     this.buildLeftPane(leftWidth, paneHeight, topMargin);
-    this.buildRightPane(rightWidth, paneHeight, topMargin, offsetX, leftWidth);
+    this.buildRightPane(rightWidth - gapWidth, paneHeight, topMargin, offsetX, leftWidth + gapWidth);
 
     // ── Nav buttons
     const backBtn = this.createCompactButton(
       this.s(100), this.s(50),
-      'BACK',
+      '< BACK',
       () => this.scene.start('LobbyScene', { selectedCharId: this.charId }),
-      colors.danger, 120,
+      colors.danger, 130,
     );
 
-    const startBtn = this.createCompactButton(
-      this.gameWidth - this.s(120), this.gameHeight - this.s(50),
+    const startBtn = this.createMenuButton(
+      this.gameWidth - this.s(160), this.gameHeight - this.s(55),
       'START BATTLE',
       () => this.startBattle(),
-      colors.primary, 200,
+      colors.primary, 260, 56,
     );
 
     this.uiContainer.add([backBtn, startBtn]);
+    this.animateSlideIn(startBtn, 600);
     this.updateVisuals();
   }
 
   /* ── Left Pane: Character Preview ───────────────────────── */
 
   private buildLeftPane(width: number, paneHeight: number, topMargin: number): void {
-    const { colors, font } = UITheme;
+    const { colors, font, radius, glass } = UITheme;
     const sf = this.scaleFactor;
 
-    // Panel background
-    const bg = this.add.rectangle(0, topMargin, width, paneHeight, colors.bgPanel, 0.85)
-      .setOrigin(0, 0)
-      .setStrokeStyle(2, colors.borderSubtle, 0.5);
+    // Glass panel background
+    const bg = this.createPanel(0, topMargin, width, paneHeight, {
+      fillColor:   colors.bgGlass,
+      fillAlpha:   glass.fillAlpha,
+      strokeColor: colors.borderSubtle,
+      strokeAlpha: glass.borderAlpha,
+      radius:      radius.lg,
+    });
     this.leftPane.add(bg);
 
     const cx      = width / 2;
-    const padding = this.s(40);
+    const padding = this.s(28);
     let y         = topMargin + padding;
 
-    // ── Portrait frame
-    const portraitSize = Math.min(this.s(180), width * 0.6);
-    const frame = this.add.circle(cx, y + portraitSize / 2, portraitSize / 2 + this.s(4), 0x000000, 0.5)
-      .setStrokeStyle(3, colors.accent, 0.8);
+    const classColor = this.getClassColor(this.charData.characterClass);
+
+    // ── Portrait ring
+    const portraitSize = Math.min(this.s(160), width * 0.55);
+    const ringRadius = portraitSize / 2 + this.s(6);
+
+    // Outer glow ring
+    const outerRing = this.add.graphics();
+    outerRing.lineStyle(2, classColor, 0.4);
+    outerRing.strokeCircle(cx, y + portraitSize / 2, ringRadius + 4);
+    this.leftPane.add(outerRing);
+
+    // Main ring
+    const frame = this.add.graphics();
+    frame.fillStyle(0x000000, 0.5);
+    frame.fillCircle(cx, y + portraitSize / 2, ringRadius);
+    frame.lineStyle(2, classColor, 0.7);
+    frame.strokeCircle(cx, y + portraitSize / 2, ringRadius);
     this.leftPane.add(frame);
 
     const portraitKey = `char_${this.charId}`;
@@ -175,26 +185,31 @@ export class LoadoutScene extends BaseScene {
       this.leftPane.add(portrait);
     } else {
       const placeholder = this.add.text(cx, y + portraitSize / 2, this.charData.name[0], {
-        fontSize: font.size(60, sf), fontFamily: font.family, fontStyle: 'bold', color: colors.textPrimary,
+        fontSize: font.size(52, sf), fontFamily: font.family, fontStyle: 'bold', color: colors.textPrimary,
       }).setOrigin(0.5);
       this.leftPane.add(placeholder);
     }
     y += portraitSize + this.s(20);
 
-    // ── Name + Class
+    // ── Name
     const name = this.add.text(cx, y, this.charData.name.toUpperCase(), {
-      fontSize: font.size(24, sf), fontFamily: font.family, fontStyle: 'bold', color: colors.textPrimary,
+      fontSize: font.size(22, sf), fontFamily: font.family, fontStyle: 'bold',
+      color: colors.textPrimary, letterSpacing: this.s(3),
     }).setOrigin(0.5);
     this.leftPane.add(name);
-    y += this.s(30);
+    y += this.s(28);
 
-    const cls = this.add.text(cx, y, this.charData.characterClass?.toUpperCase() ?? '', {
-      fontSize: font.size(14, sf), fontFamily: font.family, color: colors.textAccent,
+    // ── Class badge
+    const classText = this.charData.characterClass?.toUpperCase() ?? '';
+    const clsLabel = this.add.text(cx, y, classText, {
+      fontSize: font.size(11, sf), fontFamily: font.family, fontStyle: 'bold', color: '#000000',
     }).setOrigin(0.5);
-    this.leftPane.add(cls);
-    y += this.s(40);
+    const clsBg = this.add.rectangle(cx, y, clsLabel.width + this.s(16), clsLabel.height + this.s(6), classColor, 0.8);
+    this.leftPane.add(clsBg);
+    this.leftPane.add(clsLabel);
+    y += this.s(36);
 
-    // ── Stats (two-column vertical layout for the narrow pane)
+    // ── Stats with mini-bars
     const allStats = [
       { label: 'STR', value: this.charData.stats.strength },
       { label: 'END', value: this.charData.stats.endurance },
@@ -204,46 +219,65 @@ export class LoadoutScene extends BaseScene {
       { label: 'ACC', value: this.charData.stats.accuracy },
     ];
 
-    const colW  = (width - padding * 2) / 2;
-    const rowH  = this.s(24);
-    allStats.forEach((s, i) => {
-      const col = i % 2;
-      const row = Math.floor(i / 2);
-      const sx  = padding + col * colW;
-      const sy  = y + row * rowH;
+    const barW = width - padding * 2 - this.s(60);
+    const rowH = this.s(22);
 
-      this.leftPane.add(this.add.text(sx, sy, `${s.label}:`, {
-        fontSize: font.size(13, sf), fontFamily: font.family, color: colors.textMuted,
-      }));
-      this.leftPane.add(this.add.text(sx + this.s(32), sy, s.value.toString(), {
-        fontSize: font.size(13, sf), fontFamily: font.family, fontStyle: 'bold', color: colors.textPrimary,
-      }));
+    allStats.forEach((s, i) => {
+      const sy = y + i * rowH;
+
+      this.leftPane.add(this.add.text(padding, sy, s.label, {
+        fontSize: font.size(11, sf), fontFamily: font.family, color: colors.textDim,
+      }).setOrigin(0, 0.5));
+
+      // Mini bar
+      const barGfx = this.add.graphics();
+      const barX = padding + this.s(36);
+      const barH = this.s(5);
+      barGfx.fillStyle(0x1e293b, 0.5);
+      barGfx.fillRoundedRect(barX, sy - barH / 2, barW, barH, 2);
+      const ratio = Math.min(s.value / 20, 1);
+      barGfx.fillStyle(classColor, 0.6);
+      barGfx.fillRoundedRect(barX, sy - barH / 2, barW * ratio, barH, 2);
+      this.leftPane.add(barGfx);
+
+      this.leftPane.add(this.add.text(barX + barW + this.s(6), sy, s.value.toString(), {
+        fontSize: font.size(11, sf), fontFamily: font.family, fontStyle: 'bold', color: colors.textCyan,
+      }).setOrigin(0, 0.5));
     });
-    y += Math.ceil(allStats.length / 2) * rowH + this.s(30);
+    y += allStats.length * rowH + this.s(20);
+
+    // ── Separator
+    this.createSeparator(this.leftPane, padding, y, width - padding * 2, classColor, 0.3);
+    y += this.s(16);
 
     // ── Equipped Slots Summary
-    this.leftPane.add(this.add.text(cx, y, '── EQUIPPED ──', {
-      fontSize: font.size(12, sf), fontFamily: font.family, color: colors.textMuted,
+    this.leftPane.add(this.add.text(cx, y, 'EQUIPPED', {
+      fontSize: font.size(11, sf), fontFamily: font.family, fontStyle: 'bold',
+      color: colors.textDim, letterSpacing: this.s(4),
     }).setOrigin(0.5));
-    y += this.s(24);
+    y += this.s(22);
 
     const slotNames = ['PASSIVE', 'ACTIVE', 'STACK 1', 'STACK 2', 'STACK 3'];
     slotNames.forEach((slotLabel, i) => {
       const slotKey   = i === 0 ? 'passive' : i === 1 ? 'active' : `stack_${i - 2}`;
       const equipped  = this.getEquippedSkillForSlot(slotKey);
-      const labelText = `${slotLabel}:`;
-      const valueText = equipped ? equipped.name : '—';
+      const slotColor = i === 0 ? colors.accent : i === 1 ? colors.primary : colors.warning;
 
-      this.leftPane.add(this.add.text(padding, y, labelText, {
-        fontSize: font.size(11, sf), fontFamily: font.family, color: colors.textMuted,
-      }));
-      const valObj = this.add.text(padding + this.s(70), y, valueText, {
-        fontSize: font.size(11, sf), fontFamily: font.family, fontStyle: 'bold',
-        color: equipped ? colors.textPrimary : colors.textMuted,
-      });
+      // Slot dot
+      this.leftPane.add(this.add.circle(padding + this.s(4), y, this.s(3), slotColor, equipped ? 0.8 : 0.2));
+
+      this.leftPane.add(this.add.text(padding + this.s(14), y, slotLabel, {
+        fontSize: font.size(10, sf), fontFamily: font.family, color: colors.textDim,
+      }).setOrigin(0, 0.5));
+
+      const valueText = equipped ? equipped.name : '—';
+      const valObj = this.add.text(width - padding, y, valueText, {
+        fontSize: font.size(10, sf), fontFamily: font.family, fontStyle: 'bold',
+        color: equipped ? colors.textPrimary : colors.textDim,
+      }).setOrigin(1, 0.5);
       this.leftPane.add(valObj);
       this.slotContainers.set(slotKey, this.add.container(0, 0, [valObj]));
-      y += this.s(20);
+      y += this.s(18);
     });
   }
 
@@ -253,24 +287,34 @@ export class LoadoutScene extends BaseScene {
     width: number, paneHeight: number, topMargin: number,
     _offsetX: number, leftWidth: number,
   ): void {
-    const { colors, font, sizes } = UITheme;
+    const { colors, font, sizes, radius, glass } = UITheme;
     const sf = this.scaleFactor;
 
-    // Panel background
-    const bg = this.add.rectangle(0, topMargin, width, paneHeight, colors.bgPanel, 0.75)
-      .setOrigin(0, 0)
-      .setStrokeStyle(1, colors.border, 0.3);
+    // Glass panel background
+    const bg = this.createPanel(0, topMargin, width, paneHeight, {
+      fillColor:   colors.bgGlass,
+      fillAlpha:   glass.fillAlpha * 0.8,
+      strokeColor: colors.border,
+      strokeAlpha: glass.borderAlpha * 0.6,
+      radius:      radius.lg,
+    });
     this.rightPane.add(bg);
 
     // Section title
-    const padding  = this.s(30);
+    const padding  = this.s(28);
     const headerY  = topMargin + padding;
     this.rightPane.add(this.add.text(padding, headerY, 'LOADOUT CONFIGURATION', {
-      fontSize: font.size(22, sf), fontFamily: font.family, fontStyle: 'bold', color: colors.textAccent,
+      fontSize: font.size(20, sf), fontFamily: font.family, fontStyle: 'bold',
+      color: colors.textAccent, letterSpacing: this.s(3),
+    }));
+
+    // Subtitle
+    this.rightPane.add(this.add.text(padding, headerY + this.s(28), 'Select skills for battle', {
+      fontSize: font.size(12, sf), fontFamily: font.family, color: colors.textDim,
     }));
 
     // Scrollable content container
-    const scrollStartY = headerY + this.s(50);
+    const scrollStartY = headerY + this.s(55);
     this.scrollBaseY   = scrollStartY;
     this.scrollContainer = this.add.container(0, scrollStartY);
     this.rightPane.add(this.scrollContainer);
@@ -325,16 +369,25 @@ export class LoadoutScene extends BaseScene {
 
     if (skills.length === 0) return startY;
 
-    // Section header
-    this.scrollContainer.add(this.add.text(padding, startY, title, {
-      fontSize: font.size(16, sf), fontFamily: font.family, fontStyle: 'bold', color: colors.textSecondary,
+    const sectionColor = this.getSkillColor(type);
+
+    // Section header with accent dot
+    const dotSize = this.s(4);
+    const dotGfx = this.add.graphics();
+    dotGfx.fillStyle(sectionColor, 0.8);
+    dotGfx.fillCircle(padding + dotSize, startY + this.s(8), dotSize);
+    this.scrollContainer.add(dotGfx);
+
+    this.scrollContainer.add(this.add.text(padding + this.s(14), startY, title, {
+      fontSize: font.size(14, sf), fontFamily: font.family, fontStyle: 'bold',
+      color: colors.textSecondary, letterSpacing: this.s(2),
     }));
 
     const cardW    = this.s(sizes.skillCardWidth);
     const cardH    = this.s(sizes.skillCardHeight);
-    const spacing  = this.s(15);
+    const spacing  = this.s(14);
     const cols     = Math.max(1, Math.floor((containerWidth - padding * 2 + spacing) / (cardW + spacing)));
-    let y          = startY + this.s(35);
+    let y          = startY + this.s(32);
 
     skills.forEach((skill, i) => {
       const col = i % cols;
@@ -349,72 +402,113 @@ export class LoadoutScene extends BaseScene {
     });
 
     const totalRows = Math.ceil(skills.length / cols);
-    return y + totalRows * (cardH + spacing) + this.s(20);
+    return y + totalRows * (cardH + spacing) + this.s(16);
   }
 
   /* ── Skill Card Factory ─────────────────────────────────── */
 
   private createSkillCard(skill: SkillData, w: number, h: number): Phaser.GameObjects.Container {
-    const { colors, font, radius } = UITheme;
+    const { colors, font, radius, glass } = UITheme;
     const sf = this.scaleFactor;
+    const skillColor = this.getSkillColor(skill.type);
 
     const container = this.add.container(0, 0);
 
-    // Background
-    const bg = this.add.rectangle(0, 0, w, h, colors.bgCard, 0.9)
-      .setStrokeStyle(2, colors.border)
+    // ── Glass background
+    const bgGfx = this.add.graphics();
+    bgGfx.fillStyle(colors.bgCard, 0.85);
+    bgGfx.fillRoundedRect(-w / 2, -h / 2, w, h, radius.md);
+    // Top highlight
+    bgGfx.fillStyle(0xffffff, 0.03);
+    bgGfx.fillRoundedRect(-w / 2 + 1, -h / 2 + 1, w - 2, h * 0.2, { tl: radius.md, tr: radius.md, bl: 0, br: 0 });
+    // Border
+    bgGfx.lineStyle(1, colors.border, 0.3);
+    bgGfx.strokeRoundedRect(-w / 2, -h / 2, w, h, radius.md);
+    container.add(bgGfx);
+
+    // ── Top accent line
+    const accentGfx = this.add.graphics();
+    accentGfx.fillStyle(skillColor, 0.6);
+    accentGfx.fillRoundedRect(-w / 2 + 3, -h / 2, w - 6, 3, 1);
+    container.add(accentGfx);
+
+    // ── Interactive hit area
+    const hitArea = this.add.rectangle(0, 0, w, h, 0xffffff, 0)
       .setInteractive({ useHandCursor: true });
+    container.add(hitArea);
 
-    // Glow overlay
-    const glow = this.add.rectangle(0, 0, w, h, this.getSkillColor(skill.type), 0);
-
-    // Type icon (emoji placeholder)
-    const icon = this.add.text(0, -h / 2 + this.s(22), this.getSkillIcon(skill.type), {
-      fontSize: font.size(20, sf), fontFamily: font.family,
+    // ── Type icon
+    const icon = this.add.text(0, -h / 2 + this.s(20), this.getSkillIcon(skill.type), {
+      fontSize: font.size(18, sf), fontFamily: font.family,
     }).setOrigin(0.5);
+    container.add(icon);
 
-    // Name
-    const name = this.add.text(0, -h / 2 + this.s(45), skill.name.toUpperCase(), {
-      fontSize: font.size(12, sf), fontFamily: font.family, fontStyle: 'bold', color: colors.textPrimary,
+    // ── Name
+    const name = this.add.text(0, -h / 2 + this.s(42), skill.name.toUpperCase(), {
+      fontSize: font.size(11, sf), fontFamily: font.family, fontStyle: 'bold',
+      color: colors.textPrimary, letterSpacing: this.s(1),
     }).setOrigin(0.5);
+    container.add(name);
 
-    // Charge cost badge
-    const costBg = this.add.rectangle(w / 2 - this.s(20), -h / 2 + this.s(15), this.s(30), this.s(18), 0x000000, 0.6);
-    const cost = this.add.text(w / 2 - this.s(20), -h / 2 + this.s(15), `${skill.chargeCost}`, {
-      fontSize: font.size(12, sf), fontFamily: font.family, fontStyle: 'bold', color: colors.textDamage,
+    // ── Charge cost badge (top-right corner)
+    const costBadgeX = w / 2 - this.s(18);
+    const costBadgeY = -h / 2 + this.s(14);
+    const costBg = this.add.graphics();
+    costBg.fillStyle(0x000000, 0.6);
+    costBg.fillRoundedRect(costBadgeX - this.s(14), costBadgeY - this.s(8), this.s(28), this.s(16), 4);
+    container.add(costBg);
+    const cost = this.add.text(costBadgeX, costBadgeY, `${skill.chargeCost}`, {
+      fontSize: font.size(11, sf), fontFamily: font.family, fontStyle: 'bold', color: colors.textDamage,
     }).setOrigin(0.5);
+    container.add(cost);
 
-    // Description
-    const desc = this.add.text(0, this.s(10), skill.description, {
-      fontSize:   font.size(10, sf),
+    // ── Description
+    const desc = this.add.text(0, this.s(8), skill.description, {
+      fontSize:   font.size(9, sf),
       fontFamily: font.family,
       color:      colors.textSecondary,
       align:      'center',
-      wordWrap:   { width: w - this.s(20) },
+      wordWrap:   { width: w - this.s(18) },
+      lineSpacing: 2,
     }).setOrigin(0.5, 0);
+    container.add(desc);
 
-    // Equipped badge (hidden by default)
-    const equippedBg   = this.add.rectangle(0, h / 2 - this.s(12), this.s(80), this.s(16), colors.primary, 1);
-    const equippedText = this.add.text(0, h / 2 - this.s(12), 'EQUIPPED', {
-      fontSize: font.size(10, sf), fontFamily: font.family, fontStyle: 'bold', color: '#000000',
+    // ── Equipped badge (hidden by default)
+    const equippedBg = this.add.graphics();
+    equippedBg.fillStyle(skillColor, 0.9);
+    equippedBg.fillRoundedRect(-this.s(38), -this.s(9), this.s(76), this.s(18), this.s(9));
+    const equippedText = this.add.text(0, 0, 'EQUIPPED', {
+      fontSize: font.size(9, sf), fontFamily: font.family, fontStyle: 'bold', color: '#000000',
     }).setOrigin(0.5);
-    const equippedBadge = this.add.container(0, 0, [equippedBg, equippedText]).setAlpha(0);
+    const equippedBadge = this.add.container(0, h / 2 - this.s(14), [equippedBg, equippedText]).setAlpha(0);
     container.setData('equippedBadge', equippedBadge);
-
-    container.add([bg, glow, icon, name, costBg, cost, desc, equippedBadge]);
+    container.add(equippedBadge);
 
     // ── Interaction
-    bg.on('pointerover', () => {
-      this.tweens.add({ targets: glow, alpha: 0.15, duration: 150 });
-      this.tweens.add({ targets: container, scale: 1.05, duration: 150 });
+    hitArea.on('pointerover', () => {
+      bgGfx.clear();
+      bgGfx.fillStyle(colors.bgCardHover, 0.9);
+      bgGfx.fillRoundedRect(-w / 2, -h / 2, w, h, radius.md);
+      bgGfx.fillStyle(0xffffff, 0.05);
+      bgGfx.fillRoundedRect(-w / 2 + 1, -h / 2 + 1, w - 2, h * 0.2, { tl: radius.md, tr: radius.md, bl: 0, br: 0 });
+      bgGfx.lineStyle(1, skillColor, 0.5);
+      bgGfx.strokeRoundedRect(-w / 2, -h / 2, w, h, radius.md);
+      this.tweens.add({ targets: container, scale: 1.05, duration: 120 });
     });
-    bg.on('pointerout', () => {
-      this.tweens.add({ targets: glow, alpha: 0, duration: 150 });
-      this.tweens.add({ targets: container, scale: 1, duration: 150 });
+    hitArea.on('pointerout', () => {
+      const isEquipped = this.isSkillEquipped(skill.id);
+      bgGfx.clear();
+      bgGfx.fillStyle(isEquipped ? colors.bgCardSelected : colors.bgCard, 0.85);
+      bgGfx.fillRoundedRect(-w / 2, -h / 2, w, h, radius.md);
+      bgGfx.fillStyle(0xffffff, 0.03);
+      bgGfx.fillRoundedRect(-w / 2 + 1, -h / 2 + 1, w - 2, h * 0.2, { tl: radius.md, tr: radius.md, bl: 0, br: 0 });
+      bgGfx.lineStyle(1, isEquipped ? skillColor : colors.border, isEquipped ? 0.5 : 0.3);
+      bgGfx.strokeRoundedRect(-w / 2, -h / 2, w, h, radius.md);
+      this.tweens.add({ targets: container, scale: 1, duration: 120 });
     });
-    bg.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+    hitArea.on('pointerup', (pointer: Phaser.Input.Pointer) => {
       const dist = Phaser.Math.Distance.Between(pointer.downX, pointer.downY, pointer.upX, pointer.upY);
-      if (dist > 10) return; // Ignore drags
+      if (dist > 10) return;
       this.toggleSkill(skill);
     });
 
@@ -424,7 +518,7 @@ export class LoadoutScene extends BaseScene {
   /* ── Skill Toggle Logic ─────────────────────────────────── */
 
   private toggleSkill(skill: SkillData): void {
-    if (skill.type === SkillType.PASSIVE) return; // Auto-equipped
+    if (skill.type === SkillType.PASSIVE) return;
 
     if (skill.type === SkillType.ACTIVE) {
       this.loadout.active = this.loadout.active === skill.id ? null : skill.id;
@@ -443,16 +537,29 @@ export class LoadoutScene extends BaseScene {
   /* ── Visual State Sync ──────────────────────────────────── */
 
   private updateVisuals(): void {
-    const { colors } = UITheme;
+    const { colors, radius } = UITheme;
 
     this.skillCards.forEach((card, skillId) => {
       const isEquipped = this.isSkillEquipped(skillId);
-      const bg    = card.list[0] as Phaser.GameObjects.Rectangle;
-      const badge = card.getData('equippedBadge') as Phaser.GameObjects.Container;
+      const skill = this.availableSkills.find(s => s.id === skillId);
+      const skillColor = skill ? this.getSkillColor(skill.type) : colors.border;
+      const w = this.s(UITheme.sizes.skillCardWidth);
+      const h = this.s(UITheme.sizes.skillCardHeight);
 
-      if (bg?.setStrokeStyle) {
-        bg.setStrokeStyle(2, isEquipped ? colors.borderActive : colors.border);
+      // Update background
+      const bgGfx = card.list[0] as Phaser.GameObjects.Graphics;
+      if (bgGfx?.clear) {
+        bgGfx.clear();
+        bgGfx.fillStyle(isEquipped ? colors.bgCardSelected : colors.bgCard, 0.85);
+        bgGfx.fillRoundedRect(-w / 2, -h / 2, w, h, radius.md);
+        bgGfx.fillStyle(0xffffff, isEquipped ? 0.05 : 0.03);
+        bgGfx.fillRoundedRect(-w / 2 + 1, -h / 2 + 1, w - 2, h * 0.2, { tl: radius.md, tr: radius.md, bl: 0, br: 0 });
+        bgGfx.lineStyle(1, isEquipped ? skillColor : colors.border, isEquipped ? 0.5 : 0.3);
+        bgGfx.strokeRoundedRect(-w / 2, -h / 2, w, h, radius.md);
       }
+
+      // Update equipped badge
+      const badge = card.getData('equippedBadge') as Phaser.GameObjects.Container;
       if (badge) {
         this.tweens.add({ targets: badge, alpha: isEquipped ? 1 : 0, duration: 200 });
       }
@@ -498,6 +605,17 @@ export class LoadoutScene extends BaseScene {
       case SkillType.ACTIVE:  return '⚡';
       case SkillType.STACK:   return '🔥';
       default:                return '◆';
+    }
+  }
+
+  private getClassColor(characterClass?: string): number {
+    const { colors } = UITheme;
+    switch (characterClass?.toLowerCase()) {
+      case 'warrior':  return colors.danger;
+      case 'mage':     return colors.purple;
+      case 'rogue':    return colors.warning;
+      case 'paladin':  return colors.accent;
+      default:         return colors.cyan;
     }
   }
 

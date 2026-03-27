@@ -286,7 +286,11 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
 
     // ── Background ───────────────────────────────────────
     const bg = this.add.graphics();
-    bg.fillGradientStyle(0x0a0a2a, 0x1a0a3a, 0x0a1a3a, 0x050515, 1, 1, 1, 1);
+    bg.fillGradientStyle(
+      UITheme.colors.bgDeep, UITheme.colors.bgDeep,
+      UITheme.colors.bgPanel, UITheme.colors.bgGlass,
+      1, 1, 1, 1,
+    );
     bg.fillRect(0, 0, this.gameWidth, this.gameHeight);
 
     this.createAmbientParticles(this.add.container(0, 0));
@@ -294,22 +298,31 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
     if (this.textures.exists('menu_bg')) {
       this.add.image(this.centerX, this.centerY, 'menu_bg')
         .setDisplaySize(this.gameWidth, this.gameHeight)
-        .setAlpha(0.2);
+        .setAlpha(0.1)
+        .setTint(0x3b82f6);
     }
 
-    // ── Board Background ─────────────────────────────────
+    // ── Board Background (layered glass) ─────────────────
     const boardBg = this.add.graphics();
 
-    // Outer glow
-    boardBg.lineStyle(6, UITheme.colors.glowPurple, 0.4);
-    boardBg.strokeRoundedRect(offsetX - 12, offsetY - 12, gridWidth + 24, gridWidth + 24, UITheme.radius.xl);
+    // Outer soft glow
+    boardBg.lineStyle(8, UITheme.colors.glowPurple, 0.15);
+    boardBg.strokeRoundedRect(offsetX - 16, offsetY - 16, gridWidth + 32, gridWidth + 32, UITheme.radius.xxl);
+
+    // Mid glow
+    boardBg.lineStyle(3, UITheme.colors.glowCyan, 0.2);
+    boardBg.strokeRoundedRect(offsetX - 10, offsetY - 10, gridWidth + 20, gridWidth + 20, UITheme.radius.xl);
 
     // Dark glass fill
-    boardBg.fillStyle(0x000000, 0.6);
-    boardBg.fillRoundedRect(offsetX - 10, offsetY - 10, gridWidth + 20, gridWidth + 20, UITheme.radius.lg);
+    boardBg.fillStyle(0x000000, 0.55);
+    boardBg.fillRoundedRect(offsetX - 8, offsetY - 8, gridWidth + 16, gridWidth + 16, UITheme.radius.lg);
 
-    // Grid lines
-    boardBg.lineStyle(2, 0xffffff, 0.05);
+    // Inner top highlight
+    boardBg.fillStyle(0xffffff, 0.02);
+    boardBg.fillRoundedRect(offsetX - 6, offsetY - 6, gridWidth + 12, 40, { tl: UITheme.radius.lg, tr: UITheme.radius.lg, bl: 0, br: 0 });
+
+    // Grid lines (subtle)
+    boardBg.lineStyle(1, 0xffffff, 0.03);
     for (let i = 1; i < GRID_SIZE; i++) {
       boardBg.moveTo(offsetX + i * CELL_SIZE, offsetY);
       boardBg.lineTo(offsetX + i * CELL_SIZE, offsetY + gridWidth);
@@ -317,6 +330,10 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
       boardBg.lineTo(offsetX + gridWidth, offsetY + i * CELL_SIZE);
     }
     boardBg.strokePath();
+
+    // Border
+    boardBg.lineStyle(1, UITheme.colors.border, 0.3);
+    boardBg.strokeRoundedRect(offsetX - 8, offsetY - 8, gridWidth + 16, gridWidth + 16, UITheme.radius.lg);
 
     // ── Selection Indicator ──────────────────────────────
     this.selectionRect = this.add.rectangle(0, 0, CELL_SIZE, CELL_SIZE, 0xffffff, 0)
@@ -391,7 +408,7 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
 
     // ── Queued Skills Containers ─────────────────────────
     const queuedX = h.marginX + h.userWidth / 2;
-    this.queuedIconsContainer = this.add.container(queuedX, this.userHUD.y - this.s(40));
+    this.queuedIconsContainer = this.add.container(queuedX, this.userHUD.y - this.s(35));
     this.opponentQueuedIconsContainer = this.add.container(
       h.marginX + h.opponentWidth / 2,
       this.opponentHUD.y + h.opponentHeight + this.s(10),
@@ -407,10 +424,10 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
 
   /**
    * Builds one character HUD panel (user or opponent).
-   * Uses BaseScene's drawProgressBar for consistency.
+   * Pro-level glass panel with accent borders, progress bars, and stat chips.
    */
   private buildCharacterHUD(container: Phaser.GameObjects.Container, isUser: boolean): void {
-    const { colors, font } = UITheme;
+    const { colors, font, radius, glass } = UITheme;
     const combat = CombatManager.getInstance();
     const char   = isUser ? combat.user : combat.opponent;
     if (!char) return;
@@ -420,15 +437,23 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
     const barW   = isUser ? this.hud.userBarWidth  : this.hud.opponentBarWidth;
     const pad    = this.hud.padding;
 
-    // ── Panel background
+    // ── Glass panel background
     const panelGfx = this.createPanel(0, 0, hudW, hudH, {
-      fillColor:   colors.bgOverlay,
-      fillAlpha:   0.7,
-      strokeColor: colors.border,
-      strokeAlpha: 0.3,
-      strokeWidth: 2,
+      fillColor:   colors.bgGlass,
+      fillAlpha:   glass.fillAlpha,
+      strokeColor: isUser ? colors.border : colors.border,
+      strokeAlpha: glass.borderAlpha,
+      strokeWidth: 1,
+      radius:      radius.lg,
     });
     container.add(panelGfx);
+
+    // ── Side accent bar (user=green, opponent=red)
+    const accentColor = isUser ? colors.hpUser : colors.hpOpponent;
+    const accentGfx = this.add.graphics();
+    accentGfx.fillStyle(accentColor, 0.6);
+    accentGfx.fillRect(0, 4, 3, hudH - 8);
+    container.add(accentGfx);
 
     // ── Turn-indicator glow (behind panel)
     const glow = this.add.graphics();
@@ -436,22 +461,24 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
     if (isUser) this.userGlow = glow;
     else this.opponentGlow = glow;
 
-    // ── Character name
+    // ── Character name with class color
     const nameText = this.add.text(this.s(15), this.s(10), char.name.toUpperCase(), {
-      fontSize: font.size(18, this.scaleFactor), fontFamily: font.family,
-      fontStyle: 'bold', color: colors.textPrimary,
+      fontSize: font.size(16, this.scaleFactor), fontFamily: font.family,
+      fontStyle: 'bold', color: colors.textPrimary, letterSpacing: this.s(2),
     });
     container.add(nameText);
 
-    // ── HP Bar
-    const hpLabelY = this.s(40);
+    // ── HP Label + Bar
+    const hpLabelY = this.s(38);
     container.add(this.add.text(this.s(15), hpLabelY, 'HP', {
-      fontSize: font.size(15, this.scaleFactor), fontFamily: font.family, color: colors.textPrimary,
-    }).setAlpha(0.7));
+      fontSize: font.size(12, this.scaleFactor), fontFamily: font.family,
+      color: colors.textDim,
+    }));
 
     const hpValText = this.add.text(this.s(15) + barW, hpLabelY, `${Math.floor(char.currentHp)}/${char.maxHp}`, {
-      fontSize: font.size(15, this.scaleFactor), fontFamily: font.family, color: colors.textPrimary,
-    }).setOrigin(1, 0).setAlpha(0.7);
+      fontSize: font.size(12, this.scaleFactor), fontFamily: font.family,
+      fontStyle: 'bold', color: colors.textPrimary,
+    }).setOrigin(1, 0);
     container.add(hpValText);
     if (isUser) this.userHpText = hpValText;
     else this.opponentHpText = hpValText;
@@ -461,17 +488,19 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
     if (isUser) this.userHpBar = hpBar;
     else this.opponentHpBar = hpBar;
     const hpColor = isUser ? colors.hpUser : colors.hpOpponent;
-    this.drawProgressBar(hpBar, char.currentHp / char.maxHp, hpColor, barW, this.s(60));
+    this.drawProgressBar(hpBar, char.currentHp / char.maxHp, hpColor, barW, this.s(56));
 
-    // ── Charge Bar
-    const chargeLabelY = this.s(85);
+    // ── Charge Label + Bar
+    const chargeLabelY = this.s(82);
     container.add(this.add.text(this.s(15), chargeLabelY, 'CHARGE', {
-      fontSize: font.size(15, this.scaleFactor), fontFamily: font.family, color: colors.textPrimary,
-    }).setAlpha(0.7));
+      fontSize: font.size(12, this.scaleFactor), fontFamily: font.family,
+      color: colors.textDim,
+    }));
 
     const chargeValText = this.add.text(this.s(15) + barW, chargeLabelY, `${Math.floor(char.currentCharge)}/${char.maxCharge}`, {
-      fontSize: font.size(15, this.scaleFactor), fontFamily: font.family, color: colors.textPrimary,
-    }).setOrigin(1, 0).setAlpha(0.7);
+      fontSize: font.size(12, this.scaleFactor), fontFamily: font.family,
+      fontStyle: 'bold', color: colors.textPrimary,
+    }).setOrigin(1, 0);
     container.add(chargeValText);
     if (isUser) this.userChargeText = chargeValText;
     else this.opponentChargeText = chargeValText;
@@ -481,9 +510,9 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
     if (isUser) this.userChargeBar = chargeBar;
     else this.opponentChargeBar = chargeBar;
     const chargeColor = isUser ? colors.chargeUser : colors.chargeOpponent;
-    this.drawProgressBar(chargeBar, char.currentCharge / char.maxCharge, chargeColor, barW, this.s(100));
+    this.drawProgressBar(chargeBar, char.currentCharge / char.maxCharge, chargeColor, barW, this.s(98));
 
-    // ── Stats Row
+    // ── Stats Row (compact)
     const statData = [
       { label: 'STR', value: char.stats.strength },
       { label: 'END', value: char.stats.endurance },
@@ -492,7 +521,7 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
       { label: 'SPD', value: char.stats.speed },
       { label: 'ACC', value: char.stats.accuracy },
     ];
-    const statsRow = this.createStatRow(statData, { x: this.s(15), y: this.s(130) });
+    const statsRow = this.createStatRow(statData, { x: this.s(15), y: this.s(125), labelSize: 11, valueSize: 12 });
     container.add(statsRow);
 
     // ── Skill Buttons (user only)
@@ -502,23 +531,23 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
   }
 
   /**
-   * Renders the row of equipped stack skill buttons inside the user HUD.
+   * Renders premium skill slot buttons inside the user HUD.
    */
   private buildSkillSlots(
     container: Phaser.GameObjects.Container,
     char: Character,
     hudW: number,
   ): void {
-    const { colors, font } = UITheme;
-    const skillY     = this.s(175);
+    const { colors, font, radius } = UITheme;
+    const skillY     = this.s(165);
     const stackSkills = char.loadout.stacks || [];
     if (stackSkills.length === 0) return;
 
     const pad     = this.s(15);
-    const spacing = this.s(10);
+    const spacing = this.s(8);
     const availW  = hudW - pad * 2;
     const btnW    = Math.min(this.s(120), (availW - spacing * (stackSkills.length - 1)) / stackSkills.length);
-    const btnH    = this.s(40);
+    const btnH    = this.s(42);
     const totalW  = stackSkills.length * btnW + (stackSkills.length - 1) * spacing;
     const startX  = pad + (availW - totalW) / 2;
 
@@ -530,18 +559,25 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
 
       const btn = this.add.container(x, skillY);
 
-      const bg = this.add.rectangle(btnW / 2, btnH / 2, btnW, btnH, 0x000000, 0.6)
-        .setStrokeStyle(2, colors.border);
-
-      btn.add(bg);
+      // Glass button background
+      const bgGfx = this.add.graphics();
+      bgGfx.fillStyle(colors.bgCard, 0.7);
+      bgGfx.fillRoundedRect(0, 0, btnW, btnH, radius.sm);
+      bgGfx.lineStyle(1, colors.warning, 0.3);
+      bgGfx.strokeRoundedRect(0, 0, btnW, btnH, radius.sm);
+      // Top accent
+      bgGfx.fillStyle(colors.warning, 0.4);
+      bgGfx.fillRect(2, 0, btnW - 4, 2);
+      btn.add(bgGfx);
 
       if (skill) {
-        const nameLabel = this.add.text(this.s(10), btnH / 2, skill.name.substring(0, 8).toUpperCase(), {
-          fontSize: font.size(10, this.scaleFactor), fontFamily: font.family, color: colors.textPrimary,
+        const nameLabel = this.add.text(this.s(8), btnH / 2, skill.name.substring(0, 8).toUpperCase(), {
+          fontSize: font.size(9, this.scaleFactor), fontFamily: font.family,
+          fontStyle: 'bold', color: colors.textPrimary,
         }).setOrigin(0, 0.5);
         btn.add(nameLabel);
 
-        const costLabel = this.add.text(btnW - this.s(10), btnH / 2, `${skill.chargeCost}`, {
+        const costLabel = this.add.text(btnW - this.s(8), btnH / 2, `${skill.chargeCost}`, {
           fontSize: font.size(10, this.scaleFactor), fontFamily: font.family,
           fontStyle: 'bold', color: colors.textDamage,
         }).setOrigin(1, 0.5);
@@ -580,21 +616,27 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
   /* ── Turn HUD ───────────────────────────────────────────── */
 
   private buildTurnHUD(): void {
-    const { colors, font } = UITheme;
+    const { colors, font, radius, glass } = UITheme;
     const x = this.gameWidth - this.s(140);
     const y = this.s(50);
 
     this.turnHUD = this.add.container(x, y);
 
-    const bg = this.createPanel(-this.s(60), -this.s(20), this.s(120), this.s(50), {
-      fillColor: colors.bgOverlay, fillAlpha: 0.8,
-      strokeColor: colors.border, strokeAlpha: 0.4,
+    const bg = this.createPanel(-this.s(70), -this.s(22), this.s(140), this.s(44), {
+      fillColor: colors.bgGlass, fillAlpha: glass.fillAlpha,
+      strokeColor: colors.primary, strokeAlpha: 0.3,
+      radius: radius.md,
     });
     this.turnHUD.add(bg);
 
+    // Accent dot
+    const dot = this.add.circle(-this.s(52), 0, this.s(4), colors.primary, 0.8);
+    this.turnHUD.add(dot);
+    this.tweens.add({ targets: dot, alpha: 0.3, duration: 1200, yoyo: true, repeat: -1 });
+
     this.turnCountText = this.add.text(0, 0, 'YOUR TURN', {
-      fontSize: font.size(16, this.scaleFactor), fontFamily: font.family,
-      fontStyle: 'bold', color: colors.textAccent,
+      fontSize: font.size(14, this.scaleFactor), fontFamily: font.family,
+      fontStyle: 'bold', color: colors.textAccent, letterSpacing: this.s(2),
     }).setOrigin(0.5);
     this.turnHUD.add(this.turnCountText);
   }
@@ -602,21 +644,22 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
   /* ── Power HUD ──────────────────────────────────────────── */
 
   private buildPowerHUD(): void {
-    const { colors, font } = UITheme;
+    const { colors, font, radius, glass } = UITheme;
     const x = this.gameWidth - this.s(140);
-    const y = this.s(120);
+    const y = this.s(110);
 
     this.powerHUD = this.add.container(x, y);
 
-    const bg = this.createPanel(-this.s(60), -this.s(20), this.s(120), this.s(50), {
-      fillColor: colors.bgOverlay, fillAlpha: 0.8,
-      strokeColor: colors.warning, strokeAlpha: 0.3,
+    const bg = this.createPanel(-this.s(70), -this.s(22), this.s(140), this.s(44), {
+      fillColor: colors.bgGlass, fillAlpha: glass.fillAlpha,
+      strokeColor: colors.warning, strokeAlpha: 0.2,
+      radius: radius.md,
     });
     this.powerHUD.add(bg);
 
     this.powerText = this.add.text(0, 0, `⚡ ${this.powerSurge}`, {
-      fontSize: font.size(18, this.scaleFactor), fontFamily: font.family,
-      fontStyle: 'bold', color: colors.textDamage,
+      fontSize: font.size(16, this.scaleFactor), fontFamily: font.family,
+      fontStyle: 'bold', color: colors.textDamage, letterSpacing: this.s(1),
     }).setOrigin(0.5);
     this.powerHUD.add(this.powerText);
   }
@@ -638,21 +681,42 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
 
     this.activeSkillBtn = this.add.container(x, y);
 
+    // Outer glow ring
+    const outerGlow = this.add.graphics();
+    outerGlow.lineStyle(2, colors.primary, 0.15);
+    outerGlow.strokeCircle(0, 0, size / 2 + 6);
+    this.activeSkillBtn.add(outerGlow);
+
+    // Main circle (glass style)
     const bg = this.add.graphics();
-    bg.fillStyle(0x000000, 0.8);
+    bg.fillStyle(colors.bgGlass, 0.7);
     bg.fillCircle(0, 0, size / 2);
-    bg.lineStyle(4, colors.primary, 1);
+    bg.lineStyle(3, colors.primary, 0.8);
     bg.strokeCircle(0, 0, size / 2);
+    // Top highlight arc
+    bg.fillStyle(0xffffff, 0.06);
+    bg.fillCircle(0, -size * 0.12, size * 0.38);
     this.activeSkillBtn.add(bg);
 
+    // Pulsing ring animation
+    this.tweens.add({
+      targets: outerGlow,
+      alpha: 0.6,
+      duration: 2000,
+      yoyo: true,
+      repeat: -1,
+      ease: anim.ease.sine,
+    });
+
     const label = this.add.text(0, -this.s(10), skill ? skill.name.toUpperCase() : 'SKILL', {
-      fontSize: font.size(20, this.scaleFactor), fontFamily: font.family,
+      fontSize: font.size(18, this.scaleFactor), fontFamily: font.family,
       fontStyle: 'bold', color: colors.textPrimary,
     }).setOrigin(0.5);
     this.activeSkillBtn.add(label);
 
-    const costText = this.add.text(0, this.s(20), skill ? `${skill.chargeCost} EP` : '', {
-      fontSize: font.size(16, this.scaleFactor), fontFamily: font.family, color: colors.textCharge,
+    const costText = this.add.text(0, this.s(18), skill ? `${skill.chargeCost} EP` : '', {
+      fontSize: font.size(14, this.scaleFactor), fontFamily: font.family,
+      fontStyle: 'bold', color: colors.textCharge,
     }).setOrigin(0.5);
     this.activeSkillBtn.add(costText);
 
@@ -663,26 +727,26 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
 
     this.activeSkillBtn.on('pointerover', () => {
       SoundManager.getInstance().play(SoundType.SELECT);
-      this.tweens.add({ targets: this.activeSkillBtn, scale: 1.1, duration: anim.fast });
+      this.tweens.add({ targets: this.activeSkillBtn, scale: 1.08, duration: anim.fast });
       bg.clear();
-      bg.fillStyle(colors.primary, 0.2);
+      bg.fillStyle(colors.primary, 0.15);
       bg.fillCircle(0, 0, size / 2);
-      bg.lineStyle(4, colors.primaryLight, 1);
+      bg.lineStyle(3, colors.primaryLight, 1);
       bg.strokeCircle(0, 0, size / 2);
     });
 
     this.activeSkillBtn.on('pointerout', () => {
       this.tweens.add({ targets: this.activeSkillBtn, scale: 1, duration: anim.fast });
       bg.clear();
-      bg.fillStyle(0x000000, 0.8);
+      bg.fillStyle(colors.bgGlass, 0.7);
       bg.fillCircle(0, 0, size / 2);
-      bg.lineStyle(4, colors.primary, 1);
+      bg.lineStyle(3, colors.primary, 0.8);
       bg.strokeCircle(0, 0, size / 2);
     });
 
     this.activeSkillBtn.on('pointerdown', () => {
       SoundManager.getInstance().play(SoundType.CLICK);
-      this.tweens.add({ targets: this.activeSkillBtn, scale: 0.9, duration: 50, yoyo: true });
+      this.tweens.add({ targets: this.activeSkillBtn, scale: 0.92, duration: 50, yoyo: true });
 
       const cm = CombatManager.getInstance();
       if (user && skill && user.currentCharge >= skill.chargeCost && cm.currentTurn === 'USER') {
@@ -1188,21 +1252,21 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
     this.game.events.on('TURN_SWITCHED', (data: any) => {
       const isUserTurn = data.turn === 'USER';
       this.turnCountText?.setText(isUserTurn ? 'YOUR TURN' : 'ENEMY TURN');
-      this.turnCountText?.setColor(isUserTurn ? colors.textAccent : '#ef4444');
+      this.turnCountText?.setColor(isUserTurn ? colors.textAccent : '#f87171');
 
-      // Glow active player's HUD
+      // Glow active player's HUD with subtle animated border
       if (this.userGlow) {
         this.userGlow.clear();
         if (isUserTurn) {
-          this.userGlow.lineStyle(3, colors.primary, 0.6);
-          this.userGlow.strokeRoundedRect(-2, -2, this.hud.userWidth + 4, this.hud.userHeight + 4, UITheme.radius.lg);
+          this.userGlow.lineStyle(2, colors.hpUser, 0.4);
+          this.userGlow.strokeRoundedRect(-3, -3, this.hud.userWidth + 6, this.hud.userHeight + 6, UITheme.radius.lg + 2);
         }
       }
       if (this.opponentGlow) {
         this.opponentGlow.clear();
         if (!isUserTurn) {
-          this.opponentGlow.lineStyle(3, colors.danger, 0.6);
-          this.opponentGlow.strokeRoundedRect(-2, -2, this.hud.opponentWidth + 4, this.hud.opponentHeight + 4, UITheme.radius.lg);
+          this.opponentGlow.lineStyle(2, colors.hpOpponent, 0.4);
+          this.opponentGlow.strokeRoundedRect(-3, -3, this.hud.opponentWidth + 6, this.hud.opponentHeight + 6, UITheme.radius.lg + 2);
         }
       }
 
@@ -1225,28 +1289,54 @@ export class Game_Scene extends BaseScene implements IEffectDelegate {
 
   private showGameOver(winner: string): void {
     const { colors, font, anim } = UITheme;
+    const isUserWin = winner === 'USER';
 
+    // Dark overlay with gradient
     const overlay = this.add.rectangle(this.centerX, this.centerY, this.gameWidth, this.gameHeight, 0x000000, 0)
       .setDepth(100);
-    this.tweens.add({ targets: overlay, fillAlpha: 0.8, duration: 1000 });
+    this.tweens.add({ targets: overlay, fillAlpha: 0.85, duration: 1200 });
 
-    const isUserWin = winner === 'USER';
-    const text = this.add.text(this.centerX, this.centerY - this.s(60), isUserWin ? 'VICTORY' : 'DEFEAT', {
-      fontSize: font.size(72, this.scaleFactor), fontFamily: font.family,
-      fontStyle: 'bold',
-      color: isUserWin ? colors.textAccent : '#ef4444',
+    // Result color
+    const resultColor = isUserWin ? colors.primary : colors.danger;
+    const resultText  = isUserWin ? 'VICTORY' : 'DEFEAT';
+
+    // Glow behind text
+    const glow = this.add.graphics().setDepth(100);
+    glow.fillStyle(resultColor, 0);
+    glow.fillCircle(this.centerX, this.centerY - this.s(60), this.s(150));
+    glow.setAlpha(0);
+    this.tweens.add({ targets: glow, alpha: 0.15, duration: 1500, delay: 300 });
+
+    // Title
+    const text = this.add.text(this.centerX, this.centerY - this.s(60), resultText, {
+      fontSize: font.size(80, this.scaleFactor), fontFamily: font.family,
+      fontStyle: 'bold', letterSpacing: this.s(12),
+      color: isUserWin ? colors.textAccent : '#f87171',
+    }).setOrigin(0.5).setAlpha(0).setScale(0.8).setDepth(101);
+
+    this.tweens.add({
+      targets: text, alpha: 1, scale: 1,
+      y: this.centerY - this.s(80),
+      duration: 1000, delay: 400,
+      ease: anim.ease.back,
+    });
+
+    // Subtitle
+    const sub = this.add.text(this.centerX, this.centerY - this.s(20), isUserWin ? 'The Genesis bows to your power' : 'The Genesis claims another soul', {
+      fontSize: font.size(16, this.scaleFactor), fontFamily: font.family,
+      color: colors.textSecondary, letterSpacing: this.s(2),
     }).setOrigin(0.5).setAlpha(0).setDepth(101);
+    this.tweens.add({ targets: sub, alpha: 0.7, duration: 800, delay: 900 });
 
-    this.tweens.add({ targets: text, alpha: 1, y: this.centerY - this.s(80), duration: 1000, delay: 500, ease: anim.ease.back });
-
+    // Button
     const restartBtn = this.createMenuButton(
       this.centerX, this.centerY + this.s(60),
       'RETURN TO MENU',
       () => this.scene.start('MainMenuScene'),
-      isUserWin ? colors.primary : colors.danger,
+      resultColor,
     );
     restartBtn.setDepth(101).setAlpha(0);
-    this.tweens.add({ targets: restartBtn, alpha: 1, duration: 800, delay: 1200 });
+    this.tweens.add({ targets: restartBtn, alpha: 1, duration: 800, delay: 1200, ease: anim.ease.out });
   }
 
   /* ── Shutdown / Cleanup ─────────────────────────────────── */
