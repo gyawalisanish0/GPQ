@@ -7,11 +7,14 @@ import { BaseScene } from './BaseScene';
 import { UITheme } from './UITheme';
 
 /**
- * MainMenuScene — Boot + Title screen.
+ * MainMenuScene — Cinematic title screen.
  *
- * This scene is the FIRST to load. It handles:
- *   1. preload() — loads ALL shared game assets (images, JSON data)
- *   2. create()  — registers gems/characters into singletons, builds UI, emits SCENE_READY
+ * Pro-level design:
+ *   • Layered particle nebula background
+ *   • Animated glitch/reveal title with glow
+ *   • Premium glass buttons with staggered entrance
+ *   • Decorative corner brackets and scan lines
+ *   • Floating version badge
  */
 export class MainMenuScene extends BaseScene {
 
@@ -57,11 +60,9 @@ export class MainMenuScene extends BaseScene {
     try {
       this.registerGameData();
       this.buildUI();
-      // ★ Critical — dismisses the React loading overlay in App.tsx
       this.game.events.emit('SCENE_READY', 'MainMenuScene');
     } catch (error) {
       console.error('MainMenuScene creation failed:', error);
-      // Emit anyway so user isn't stuck permanently
       this.game.events.emit('SCENE_READY', 'MainMenuScene');
     }
   }
@@ -109,61 +110,205 @@ export class MainMenuScene extends BaseScene {
     // ── Background
     this.createSceneBackground(this.uiContainer);
 
-    // ── Particles (use whichever texture key exists)
+    // ── Ambient particles
     const particleKey = this.textures.exists('star_particle') ? 'star_particle'
                       : this.textures.exists('particle')      ? 'particle'
                       : null;
     if (particleKey) {
-      const particles = this.add.particles(this.centerX, this.gameHeight * 0.4, particleKey, {
-        x: { min: -this.gameWidth / 2, max: this.gameWidth / 2 },
-        y: { min: -200 * this.scaleFactor, max: 200 * this.scaleFactor },
-        speed: { min: 5 * this.scaleFactor, max: 50 * this.scaleFactor },
-        scale: { start: 0.4 * this.scaleFactor, end: 0 },
-        alpha: { start: 0.3, end: 0 },
-        lifespan: 3000,
-        frequency: 50,
-        blendMode: 'ADD',
-        tint: colors.particleTint,
-      });
-      this.uiContainer.add(particles);
+      this.createAmbientParticles(this.uiContainer, colors.particleTint);
     }
 
-    // ── Title
-    const title = this.add.text(this.centerX, this.gameHeight * 0.25, 'GENESIS', {
-      fontSize: font.size(140, this.scaleFactor), fontFamily: font.family,
-      fontStyle: 'bold', color: colors.textPrimary, letterSpacing: this.s(25),
-    }).setOrigin(0.5).setAlpha(0).setScale(0.8);
+    // ── Decorative corner brackets
+    this.drawCornerBrackets(this.uiContainer);
+
+    // ── Horizontal scan lines (subtle)
+    this.drawScanLines(this.uiContainer);
+
+    // ── Title Block ──────────────────────────────────────
+    const titleY = this.gameHeight * 0.22;
+
+    // Title glow (behind text)
+    const titleGlow = this.add.graphics();
+    titleGlow.fillStyle(colors.primary, 0.08);
+    titleGlow.fillCircle(this.centerX, titleY + this.s(20), this.s(200));
+    this.uiContainer.add(titleGlow);
+    this.tweens.add({
+      targets: titleGlow,
+      alpha: 0.4,
+      duration: 3000,
+      yoyo: true,
+      repeat: -1,
+      ease: anim.ease.sine,
+    });
+
+    // Main title
+    const title = this.add.text(this.centerX, titleY, 'GENESIS', {
+      fontSize:      font.size(120, this.scaleFactor),
+      fontFamily:    font.family,
+      fontStyle:     'bold',
+      color:         colors.textPrimary,
+      letterSpacing: this.s(30),
+    }).setOrigin(0.5).setAlpha(0).setScale(0.9);
     this.uiContainer.add(title);
 
-    const subtitle = this.add.text(this.centerX, this.gameHeight * 0.35, 'PUZZLE QUEST', {
-      fontSize: font.size(36, this.scaleFactor), fontFamily: font.family,
-      fontStyle: 'bold', color: colors.textAccent, letterSpacing: this.s(15),
+    // Subtitle
+    const subtitle = this.add.text(this.centerX, titleY + this.s(100), 'PUZZLE QUEST', {
+      fontSize:      font.size(32, this.scaleFactor),
+      fontFamily:    font.family,
+      fontStyle:     'bold',
+      color:         colors.textAccent,
+      letterSpacing: this.s(18),
     }).setOrigin(0.5).setAlpha(0);
     this.uiContainer.add(subtitle);
 
-    this.tweens.add({ targets: title, alpha: 1, scale: 1, duration: 1500, ease: anim.ease.out });
-    this.tweens.add({ targets: subtitle, alpha: 1, y: this.gameHeight * 0.38, duration: 1000, delay: 500, ease: anim.ease.out });
+    // Decorative line under subtitle
+    const lineY = titleY + this.s(140);
+    const lineWidth = this.s(300);
+    const lineGfx = this.add.graphics();
+    lineGfx.setAlpha(0);
+    this.uiContainer.add(lineGfx);
 
-    // ── Buttons
-    const buttonY = this.gameHeight * 0.60;
-    const spacing = this.s(90);
+    // Draw the separator manually (since we need to animate it)
+    const drawLine = () => {
+      lineGfx.clear();
+      const segments = 20;
+      const segW = lineWidth / segments;
+      for (let i = 0; i < segments; i++) {
+        const t = i / segments;
+        const edgeFade = Math.sin(t * Math.PI);
+        lineGfx.lineStyle(1, colors.primary, 0.5 * edgeFade);
+        lineGfx.moveTo(this.centerX - lineWidth / 2 + i * segW, 0);
+        lineGfx.lineTo(this.centerX - lineWidth / 2 + (i + 1) * segW, 0);
+      }
+      lineGfx.strokePath();
+      // Center diamond
+      const d = this.s(5);
+      lineGfx.fillStyle(colors.primary, 0.6);
+      lineGfx.beginPath();
+      lineGfx.moveTo(this.centerX, -d);
+      lineGfx.lineTo(this.centerX + d, 0);
+      lineGfx.lineTo(this.centerX, d);
+      lineGfx.lineTo(this.centerX - d, 0);
+      lineGfx.closePath();
+      lineGfx.fillPath();
+    };
+    drawLine();
+    lineGfx.setPosition(0, lineY);
 
-    const buttons = [
-      { label: 'START GAME', color: colors.primary, cb: () => this.scene.start('LobbyScene') },
-      { label: 'OPTIONS',    color: colors.accent,  cb: () => console.log('Options') },
-      { label: 'EXIT',       color: colors.danger,  cb: () => console.log('Exit') },
-    ];
-    buttons.forEach((def, i) => {
-      const btn = this.createMenuButton(this.centerX, buttonY + i * spacing, def.label, def.cb, def.color);
-      this.uiContainer.add(btn);
-      this.animateSlideIn(btn, 1000 + i * anim.stagger);
+    // ── Title Animations
+    this.tweens.add({
+      targets: title,
+      alpha: 1, scale: 1,
+      duration: 1500,
+      ease: anim.ease.out,
+    });
+    this.tweens.add({
+      targets: subtitle,
+      alpha: 1,
+      y: titleY + this.s(105),
+      duration: 1000,
+      delay: 400,
+      ease: anim.ease.out,
+    });
+    this.tweens.add({
+      targets: lineGfx,
+      alpha: 1,
+      duration: 800,
+      delay: 800,
+      ease: anim.ease.out,
     });
 
-    // ── Version tag
-    const version = this.add.text(this.centerX, this.gameHeight - this.s(40), 'v0.1 ALPHA', {
-      fontSize: font.size(14, this.scaleFactor), fontFamily: font.family, color: colors.textMuted,
+    // ── Buttons ──────────────────────────────────────────
+    const buttonY = this.gameHeight * 0.58;
+    const spacing = this.s(95);
+
+    const buttons = [
+      { label: 'START GAME', color: colors.primary,  cb: () => this.scene.start('LobbyScene') },
+      { label: 'OPTIONS',    color: colors.accent,   cb: () => console.log('Options') },
+      { label: 'EXIT',       color: colors.danger,   cb: () => console.log('Exit') },
+    ];
+    buttons.forEach((def, i) => {
+      const btn = this.createMenuButton(
+        this.centerX, buttonY + i * spacing,
+        def.label, def.cb, def.color,
+      );
+      this.uiContainer.add(btn);
+      this.animateSlideIn(btn, 900 + i * anim.stagger);
+    });
+
+    // ── Bottom info bar ──────────────────────────────────
+    const bottomY = this.gameHeight - this.s(50);
+
+    // Version badge
+    const version = this.add.text(this.centerX, bottomY, 'v0.1 ALPHA', {
+      fontSize:      font.size(12, this.scaleFactor),
+      fontFamily:    font.family,
+      color:         colors.textDim,
+      letterSpacing: this.s(3),
     }).setOrigin(0.5).setAlpha(0);
     this.uiContainer.add(version);
-    this.tweens.add({ targets: version, alpha: 0.5, duration: 2000, delay: 1800 });
+    this.tweens.add({ targets: version, alpha: 0.6, duration: 2000, delay: 1600 });
+
+    // Status dots (decorative)
+    const dotY = bottomY - this.s(20);
+    for (let i = 0; i < 3; i++) {
+      const dot = this.add.circle(
+        this.centerX + (i - 1) * this.s(16),
+        dotY,
+        this.s(3),
+        colors.primary,
+        i === 0 ? 0.8 : 0.2,
+      );
+      this.uiContainer.add(dot);
+      this.tweens.add({ targets: dot, alpha: dot.alpha, duration: 1500, delay: 1800 });
+    }
+  }
+
+  /* ── Decorative Corner Brackets ─────────────────────────── */
+
+  private drawCornerBrackets(container: Phaser.GameObjects.Container): void {
+    const { colors } = UITheme;
+    const gfx = this.add.graphics();
+    const len = this.s(40);
+    const margin = this.s(20);
+    const alpha = 0.2;
+    const lineW = 2;
+
+    gfx.lineStyle(lineW, colors.primary, alpha);
+
+    // Top-left
+    gfx.moveTo(margin, margin + len);
+    gfx.lineTo(margin, margin);
+    gfx.lineTo(margin + len, margin);
+
+    // Top-right
+    gfx.moveTo(this.gameWidth - margin - len, margin);
+    gfx.lineTo(this.gameWidth - margin, margin);
+    gfx.lineTo(this.gameWidth - margin, margin + len);
+
+    // Bottom-left
+    gfx.moveTo(margin, this.gameHeight - margin - len);
+    gfx.lineTo(margin, this.gameHeight - margin);
+    gfx.lineTo(margin + len, this.gameHeight - margin);
+
+    // Bottom-right
+    gfx.moveTo(this.gameWidth - margin - len, this.gameHeight - margin);
+    gfx.lineTo(this.gameWidth - margin, this.gameHeight - margin);
+    gfx.lineTo(this.gameWidth - margin, this.gameHeight - margin - len);
+
+    gfx.strokePath();
+    container.add(gfx);
+  }
+
+  /* ── Scan Lines ─────────────────────────────────────────── */
+
+  private drawScanLines(container: Phaser.GameObjects.Container): void {
+    const gfx = this.add.graphics();
+    gfx.fillStyle(0xffffff, 0.01);
+    const step = this.s(4);
+    for (let y = 0; y < this.gameHeight; y += step * 2) {
+      gfx.fillRect(0, y, this.gameWidth, step);
+    }
+    container.add(gfx);
   }
 }
