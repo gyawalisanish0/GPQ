@@ -210,17 +210,45 @@ export class GameLogic {
     return results;
   }
 
+  /**
+   * Returns true if the cell group forms a T-shape, L-shape, or cross pattern.
+   * Detection: any cell with ≥3 orthogonal neighbors in the group (T/cross junction),
+   * OR any cell with exactly 2 non-collinear neighbors (L-corner: one horizontal + one vertical).
+   * The junction cell (most neighbors) is also returned as the preferred spawn position.
+   */
+  private hasBranchingShape(cells: { r:number; c:number }[]): { branching: boolean; junction: { r:number; c:number } | null } {
+    const cellSet = new Set(cells.map(({ r, c }) => `${r},${c}`));
+    const dirs = [[-1,0],[1,0],[0,-1],[0,1]] as const;
+    let bestNeighborCount = 0;
+    let junction: { r:number; c:number } | null = null;
+
+    for (const cell of cells) {
+      const neighbors = dirs.filter(([dr, dc]) => cellSet.has(`${cell.r+dr},${cell.c+dc}`));
+      const count = neighbors.length;
+
+      if (count >= 3) {
+        // T-junction or cross: qualifies immediately
+        if (count > bestNeighborCount) { bestNeighborCount = count; junction = cell; }
+      } else if (count === 2) {
+        // Check for non-collinear: one neighbor on a different axis than the other
+        const axes = neighbors.map(([dr]) => dr !== 0 ? 'v' : 'h');
+        if (axes[0] !== axes[1]) {
+          // L-corner
+          if (count > bestNeighborCount) { bestNeighborCount = count; junction = cell; }
+        }
+      }
+    }
+
+    return { branching: junction !== null, junction };
+  }
+
   private scoreGroup(cells: { r:number; c:number }[]): MatchResult {
     let score = cells.length * 10;
     let minR = this.gridSize, maxR = -1, minC = this.gridSize, maxC = -1;
-    const rowCnt = new Map<number, number>();
-    const colCnt = new Map<number, number>();
 
     for (const { r, c } of cells) {
       if (r < minR) minR = r; if (r > maxR) maxR = r;
       if (c < minC) minC = c; if (c > maxC) maxC = c;
-      rowCnt.set(r, (rowCnt.get(r) ?? 0) + 1);
-      colCnt.set(c, (colCnt.get(c) ?? 0) + 1);
     }
 
     const w = maxC - minC + 1, h = maxR - minR + 1;
@@ -229,21 +257,26 @@ export class GameLogic {
     let target = cells[0];
 
     if (w >= 5 || h >= 5) {
+      // 5+ in any direction → PARASITE
       target = cells.find(c => w >= 5 ? c.c === minC + 2 : c.r === minR + 2) ?? cells[0];
       specialCreation = { r: target.r, c: target.c, type: SpecialType.PARASITE, shape: ShapeType.NONE };
       score += 40;
-    } else if (w >= 3 && h >= 3) {
-      const cross = cells.find(c => (rowCnt.get(c.r)??0) >= 3 && (colCnt.get(c.c)??0) >= 3);
-      if (cross) target = cross;
-      specialCreation = { r: target.r, c: target.c, type: SpecialType.BOMB, shape };
-      score += 30;
-    } else if (w === 4 || h === 4) {
-      target = cells.find(c => w === 4 ? (c.c === minC+1||c.c === minC+2) : (c.r === minR+1||c.r === minR+2)) ?? cells[0];
-      specialCreation = { r: target.r, c: target.c, type: SpecialType.PULSAR, shape };
-      score += 20;
-    } else if (w >= 2 && h >= 2) {
-      specialCreation = { r: target.r, c: target.c, type: SpecialType.MISSILE, shape };
-      score += 20;
+    } else {
+      const { branching, junction } = this.hasBranchingShape(cells);
+      if (branching && junction) {
+        // T-shape / L-shape / cross → BOMB (spawns at junction cell)
+        specialCreation = { r: junction.r, c: junction.c, type: SpecialType.BOMB, shape };
+        score += 30;
+      } else if (w === 4 || h === 4) {
+        // Exactly 4 in a line → PULSAR
+        target = cells.find(c => w === 4 ? (c.c === minC+1||c.c === minC+2) : (c.r === minR+1||c.r === minR+2)) ?? cells[0];
+        specialCreation = { r: target.r, c: target.c, type: SpecialType.PULSAR, shape };
+        score += 20;
+      } else if (w === 2 && h === 2 && cells.length === 4) {
+        // Exact 2×2 square → MISSILE
+        specialCreation = { r: target.r, c: target.c, type: SpecialType.MISSILE, shape };
+        score += 20;
+      }
     }
 
     return { cells, specialCreation, score };

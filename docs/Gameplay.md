@@ -11,13 +11,14 @@ Complete reference for all gameplay mechanics as implemented in the codebase.
 3. [Gems](#3-gems)
 4. [Matching Rules](#4-matching-rules)
 5. [Special Gems](#5-special-gems)
-6. [Damage & Combat](#6-damage--combat)
-7. [Charge System](#7-charge-system)
-8. [Skills](#8-skills)
-9. [Characters & Classes](#9-characters--classes)
-10. [Opponent AI](#10-opponent-ai)
-11. [Input Handling](#11-input-handling)
-12. [Known Bugs & Fixes](#12-known-bugs--fixes)
+6. [Special Gem Color & Visual Identity](#6-special-gem-color--visual-identity)
+7. [Damage & Combat](#7-damage--combat)
+8. [Charge System](#8-charge-system)
+9. [Skills](#9-skills)
+10. [Characters & Classes](#10-characters--classes)
+11. [Opponent AI](#11-opponent-ai)
+12. [Input Handling](#12-input-handling)
+13. [Known Bugs & Fixes](#13-known-bugs--fixes)
 
 ---
 
@@ -105,12 +106,14 @@ Each character class has a **linked gem** — the shape they match to generate c
 
 ### Special Gem Types (`SpecialType` enum)
 
-| Type | Created By | Effect |
-|------|-----------|--------|
-| MISSILE | 4 in a row/column | Fires 3 projectiles, each destroying one cell |
-| PULSAR | Cross match (3×3+) | Clears one full row + one full column |
-| BOMB | 2×2+ box match | Destroys all gems in radius 2 |
-| PARASITE | 5+ in a row/column | Targets all gems of a chosen shape on the board |
+| Type | Created By | Color | Effect |
+|------|-----------|-------|--------|
+| MISSILE | Exact 2×2 square match | Inherits creation gem color | Fires 3 projectiles, each destroying one cell |
+| PULSAR | Exactly 4 in a line | Inherits creation gem color | Clears one full row + one full column |
+| BOMB | T-shape / L-shape / cross match | Inherits creation gem color | Destroys all gems in radius 2 |
+| PARASITE | 5+ in a row/column | Fixed purple `0x8b5cf6` | Targets all gems of a chosen shape on the board |
+
+**Color inheritance:** MISSILE, PULSAR, and BOMB take the color of the gem shape that formed them. The `shape` field on `LogicCell` stores the creation gem's `ShapeType`; rendering derives the display color via `GemRegistry.getColorForShape(cell.shape)`. PARASITE always uses purple because it has no single creation shape (`ShapeType.NONE`).
 
 Gem data is loaded from `public/data/gems/` JSON files and registered into `GemRegistry` at boot.
 
@@ -137,14 +140,18 @@ Base score = `10 × cell count`
 
 ### Special Gem Creation Rules
 
-Special gems are created at the center of a qualifying match and replace the normal gem at that position.
+Special gems are created at the junction/center of a qualifying match and replace the normal gem at that position. Rules are checked in priority order — the first match wins.
 
-| Match shape | Special created |
-|-------------|----------------|
-| 5+ cells wide OR 5+ cells tall | **PARASITE** |
-| 3+ wide AND 3+ tall (cross) | **BOMB** (at cross intersection) |
-| Exactly 4 wide OR 4 tall | **PULSAR** |
-| 2+ wide AND 2+ tall (box) | **MISSILE** |
+| Priority | Match pattern | Condition | Special created |
+|----------|---------------|-----------|----------------|
+| 1 | 5+ in any direction | `w ≥ 5` or `h ≥ 5` | **PARASITE** |
+| 2 | T-shape / L-shape / cross | Any cell has ≥ 3 neighbors in the group, OR any cell has exactly 2 non-collinear neighbors (one horizontal + one vertical) | **BOMB** |
+| 3 | Exactly 4 in a line | `w === 4` or `h === 4` | **PULSAR** |
+| 4 | Exact 2×2 square | `w === 2`, `h === 2`, 4 cells total | **MISSILE** |
+
+**Detection detail for T/L/cross (BOMB):** After a match group is formed, each cell's orthogonal neighbors within the group are counted. A junction cell is one where ≥ 3 neighbors are present (T or cross) or exactly 2 perpendicular-axis neighbors are present (L-corner). The junction cell is used as the special gem's spawn position.
+
+**What does NOT create a special:** A plain 3-in-a-row or 3-in-a-column with no branching and no 2×2 box.
 
 ---
 
@@ -181,7 +188,45 @@ Special gems are created at the center of a qualifying match and replace the nor
 
 ---
 
-## 6. Damage & Combat
+## 6. Special Gem Color & Visual Identity
+
+### Color Inheritance
+
+Special gems (MISSILE, PULSAR, BOMB) inherit the color of the gem type that created them. This is stored in `cell.shape` (`ShapeType`) on the `LogicCell` and resolved to a hex color at render time:
+
+```typescript
+// Render-side (Game_Scene.ts):
+const color = GemRegistry.getInstance().getColorForShape(cell.shape);
+sprite.setTint(color);
+```
+
+| `cell.shape` | Inherited color | Example: BOMB made of STARs |
+|---|---|---|
+| STAR | `0xef4444` (red) | Red BOMB |
+| HEXAGON | `0xeab308` (yellow) | Yellow BOMB |
+| TRIANGLE | `0x3b82f6` (blue) | Blue BOMB |
+| SQUARE | `0x22c55e` (green) | Green BOMB |
+| PENTAGON | `0xec4899` (pink) | Pink BOMB |
+| NONE (PARASITE) | `0x8b5cf6` (purple) | Always purple |
+
+### Visual Distinguishability
+
+Because special gems share colors with normal gems, they must carry a secondary visual cue so the player always knows they are activatable (by swap or by being destroyed as part of another effect).
+
+Each special type has an **overlay glyph** rendered on top of the colored sprite:
+
+| Special | Overlay glyph | Meaning |
+|---------|--------------|---------|
+| MISSILE | `→` | Projectile direction |
+| PULSAR | `✛` | Cross-beam pattern |
+| BOMB | `✦` | Explosion burst |
+| PARASITE | `◎` | Target all of a shape |
+
+All glyphs render in white (`#ffffff`) at ~40% of cell size, centered, at depth = gem depth + 1. An additional pulsing outer glow (tint color, 0.6 alpha, 2s yoyo) further separates them from normal gems.
+
+---
+
+## 7. Damage & Combat
 
 ### Match Damage Formula
 
@@ -242,7 +287,7 @@ The game ends immediately when any character's `currentHp` reaches ≤ 0. The su
 
 ---
 
-## 7. Charge System
+## 8. Charge System
 
 - Characters start each combat with **0 charge**.
 - Charge is gained by matching the character's **linked gem shape** (see Classes table above).
@@ -252,7 +297,7 @@ The game ends immediately when any character's `currentHp` reaches ≤ 0. The su
 
 ---
 
-## 8. Skills
+## 9. Skills
 
 ### Skill Types
 
@@ -310,7 +355,7 @@ STACK skills add an entry to `stackQueue` with a trigger shape, an effect type, 
 
 ---
 
-## 9. Characters & Classes
+## 10. Characters & Classes
 
 ### Character Stats
 
@@ -367,7 +412,7 @@ Located at `public/data/characters/{id}/main.json`:
 
 ---
 
-## 10. Opponent AI
+## 11. Opponent AI
 
 The AI runs on the opponent's turn with a 1-second delay before acting.
 
@@ -394,7 +439,7 @@ The AI runs on the opponent's turn with a 1-second delay before acting.
 
 ---
 
-## 11. Input Handling
+## 12. Input Handling
 
 ### Swipe / Drag Swap
 
@@ -410,7 +455,7 @@ The AI runs on the opponent's turn with a 1-second delay before acting.
 
 ---
 
-## 12. Known Bugs & Fixes
+## 13. Known Bugs & Fixes
 
 These bugs have been fixed in the current codebase. Notes are preserved here for context.
 

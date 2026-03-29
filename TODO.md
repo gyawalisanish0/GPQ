@@ -1,5 +1,19 @@
 # Genesis Puzzle Quest — TODO
 
+> Quick-glance checklist. Full implementation details with context are in `docs/TODO.md`.
+
+## Engine — Special Gem Rules
+
+- [ ] Add `hasBranchingShape(cells)` private method to `GameLogic.ts` — detects T/L/cross patterns (cell with ≥3 group-neighbors, or 2 non-collinear group-neighbors)
+- [ ] Update `scoreGroup()` in `GameLogic.ts`: T/L/cross → BOMB (replaces old cross-cell check), exact 2×2 → MISSILE (replaces old `w>=2 && h>=2`)
+- [ ] Add `getColorForShape(shape: ShapeType): number` to `GemRegistry.ts` — returns hex color for a shape; NONE → `0x8b5cf6` (parasite purple)
+
+## Rendering — Special Gem Visuals (implement during Game_Scene rebuild)
+
+- [ ] Color tinting: special gem sprites use `GemRegistry.getColorForShape(cell.shape)` as tint
+- [ ] Overlay glyph: MISSILE→`→`, PULSAR→`✛`, BOMB→`✦`, PARASITE→`◎` (white, ~40% cell size, depth +1)
+- [ ] Activation glow: pulsing outer glow ring on all special gems (tint color, 0.6 alpha, 2s yoyo)
+
 ## Scene Rebuilds (Pro-Level UI)
 
 All scenes have been cleared and need to be rebuilt from scratch with the new design system (`UITheme.ts` + `BaseScene.ts`).

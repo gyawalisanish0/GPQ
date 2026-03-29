@@ -5,6 +5,14 @@ Design basis: **1080×1920** portrait. All values scaled via `s()`. Use constrai
 
 ---
 
+## Architecture Constraint
+
+**Scenes are rendering-only.** Every scene may read from engine singletons (`CombatRegistry`, `GemRegistry`) and call engine API methods (`CombatManager.init`, `GameLogic.findMatches`, etc.), but **zero game logic** — damage calculations, match detection, charge management, turn flow, skill execution, AI — may live inside any scene file. Logic that doesn't belong in a scene must be moved to `src/engine/`.
+
+`Game_Scene` implements `IEffectDelegate` for visual callbacks only (animations, particles, camera shake). It is the delegate, not the decision-maker.
+
+---
+
 ## Pre-requisite: Fix CombatRegistry
 
 **File:** `src/engine/CombatRegistry.ts`
@@ -323,12 +331,39 @@ For each side (user/opponent):
 - Special type overlay: text glyph (━, ┃, ◉, ✦)
 - Star particle texture for effects
 
-### Shapes and Colours of Gems
-- Red Star 
-- Green Square 
-- Blue Triangle 
-- Pink Pentagon 
-- Yellow Hexagon 
+### Shapes and Colours of Normal Gems
+
+| Shape | Color |
+|-------|-------|
+| Star | Red `0xef4444` |
+| Square | Green `0x22c55e` |
+| Triangle | Blue `0x3b82f6` |
+| Pentagon | Pink `0xec4899` |
+| Hexagon | Yellow `0xeab308` |
+
+### Special Gem Visual Spec
+
+Special gems inherit the color of the gem type that created them (via `GemRegistry.getColorForShape(cell.shape)`). Because they share a color with normal gems they **must** carry a secondary visual cue at all times — they are activatable both by a valid swap and by destruction from another effect.
+
+**Color resolution (render-side only, no logic):**
+```typescript
+const color = GemRegistry.getInstance().getColorForShape(cell.shape);
+sprite.setTint(color);
+// PARASITE: cell.shape === ShapeType.NONE → always 0x8b5cf6 (purple)
+```
+
+**Overlay glyph** — render on top of base sprite, white `#ffffff`, ~40% cell size, centered, depth = gem depth + 1:
+
+| Special type | Glyph | Visual meaning |
+|---|---|---|
+| MISSILE | `→` | Projectile direction |
+| PULSAR | `✛` | Cross-beam clearing pattern |
+| BOMB | `✦` | Explosion burst |
+| PARASITE | `◎` | Target-all-of-a-shape |
+
+**Activation glow:** Pulsing outer glow ring on every special gem (tint color, 0.6 alpha, 2s yoyo tween). Communicates activatability independent of the gem's color.
+
+> **Architecture note:** All rendering decisions (tint, glyph, glow) live in `Game_Scene.ts` only. `GemRegistry` is queried for color data only — never for match logic, damage, or turn state.
 
 ### Swap + Cascade Loop
 ```

@@ -224,6 +224,7 @@ Key notes from the spec:
 - **No magic numbers:** Use `UITheme` for all design values; use `s()` for all pixel values
 - **TypeScript:** Prefer interfaces over `any`; use enums for finite value sets
 - **Comments:** Inline `// FIX:` comments document known bugs and their solutions — preserve these
+- **Scenes are rendering-only:** Scenes implement `IEffectDelegate` for visual callbacks (animations, particles, camera effects). No game logic — match detection, damage calculation, charge management, turn flow, skill execution, or AI — may live in a scene file. All such logic belongs exclusively in `src/engine/`. If you find logic in a scene, move it to the appropriate engine class.
 
 ---
 
@@ -238,12 +239,13 @@ Key notes from the spec:
 
 ## Current Development Focus
 
-See `TODO.md` for the full checklist. Active work areas:
+See `docs/TODO.md` for the full implementation checklist (authoritative). Root `TODO.md` is a quick-glance summary. Active work areas:
 
-1. **Scene UI rebuilds** — All four scenes are cleared shells awaiting implementation per `docs/UI-Design.md`
-2. **CombatRegistry fix** — Add `updateCharacterLoadout` method (prerequisite for LoadoutScene)
-3. **EffectManager review** — Audit delegate wiring for completeness
-4. **Content balance** — `data/balance.json` needs tuning once scenes are functional
+1. **Special gem engine changes** — T/L → BOMB, exact 2×2 → MISSILE; `hasBranchingShape()` helper; `getColorForShape()` in GemRegistry
+2. **Scene UI rebuilds** — All four scenes are cleared shells awaiting implementation per `docs/UI-Design.md`
+3. **CombatRegistry fix** — Add `updateCharacterLoadout` method (prerequisite for LoadoutScene)
+4. **Special gem rendering** — Color tinting + overlay glyphs + activation glow (post-scene-rebuild)
+5. **Content balance** — `data/balance.json` needs tuning once scenes are functional
 
 ---
 
