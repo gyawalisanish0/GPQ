@@ -1,4 +1,4 @@
-import { CharacterData, Character } from '../entities/Character';
+import { CharacterData, Character, CharacterLoadout } from '../entities/Character';
 import { SkillData, Skill } from '../entities/Skill';
 
 export class CombatRegistry {
@@ -53,5 +53,10 @@ export class CombatRegistry {
 
     public getAllSkillsData(): SkillData[] {
         return Array.from(this.skills.values());
+    }
+
+    public updateCharacterLoadout(charId: string, loadout: CharacterLoadout): void {
+        const data = this.characters.get(charId);
+        if (data) data.loadout = loadout;
     }
 }

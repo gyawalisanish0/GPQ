@@ -9,12 +9,9 @@ import { UITheme } from './UITheme';
 /**
  * MainMenuScene — Boot + Title screen.
  *
- * This scene is the FIRST to load. It handles:
+ * Handles:
  *   1. preload() — loads ALL shared game assets (images, JSON data)
- *   2. create()  — registers gems/characters into singletons, builds UI, emits SCENE_READY
- *
- * TODO: Rebuild with pro-level cinematic title screen.
- * See docs/UI-LAYOUT.md for schematic.
+ *   2. create()  — registers gems/characters into singletons, builds pro UI, emits SCENE_READY
  */
 export class MainMenuScene extends BaseScene {
 
@@ -23,7 +20,7 @@ export class MainMenuScene extends BaseScene {
   }
 
   /* ══════════════════════════════════════════════════════════
-   *  PRELOAD — Load every shared asset the game needs.
+   *  PRELOAD
    * ══════════════════════════════════════════════════════════ */
 
   preload() {
@@ -51,7 +48,7 @@ export class MainMenuScene extends BaseScene {
   }
 
   /* ══════════════════════════════════════════════════════════
-   *  CREATE — Register data, build UI, signal ready.
+   *  CREATE
    * ══════════════════════════════════════════════════════════ */
 
   create() {
@@ -93,33 +90,147 @@ export class MainMenuScene extends BaseScene {
     }
   }
 
-  /* ── Build UI (placeholder) ─────────────────────────────── */
+  /* ── Build UI ───────────────────────────────────────────── */
 
   private buildUI(): void {
-    // Placeholder: simple title so the scene is not blank
-    const { colors, font } = UITheme;
+    const { colors, font, anim, radius } = UITheme;
+    const root = this.add.container(0, 0);
 
-    const bg = this.add.graphics();
-    bg.fillGradientStyle(0x030712, 0x030712, 0x0a1628, 0x0f172a, 1, 1, 1, 1);
-    bg.fillRect(0, 0, this.gameWidth, this.gameHeight);
+    // 1. Background
+    this.createSceneBackground(root);
 
-    this.add.text(this.centerX, this.centerY - this.s(60), 'GENESIS', {
-      fontSize: font.size(80, this.scaleFactor),
+    // 2. Ambient particles
+    this.createAmbientParticles(root);
+
+    // 3. Scan lines
+    const scanLines = this.add.graphics();
+    for (let y = 0; y < this.gameHeight; y += 4) {
+      scanLines.lineStyle(1, 0xffffff, 0.01);
+      scanLines.moveTo(0, y);
+      scanLines.lineTo(this.gameWidth, y);
+    }
+    scanLines.strokePath();
+    root.add(scanLines);
+
+    // 4. Corner brackets
+    const bracketLen = this.s(40);
+    const bracketMargin = this.s(20);
+    const bracketThick = 2;
+    const bColor = colors.primary;
+    const bAlpha = 0.4;
+    const brackets = this.add.graphics();
+    brackets.lineStyle(bracketThick, bColor, bAlpha);
+    // Top-left
+    brackets.moveTo(bracketMargin + bracketLen, bracketMargin);
+    brackets.lineTo(bracketMargin, bracketMargin);
+    brackets.lineTo(bracketMargin, bracketMargin + bracketLen);
+    // Top-right
+    brackets.moveTo(this.gameWidth - bracketMargin - bracketLen, bracketMargin);
+    brackets.lineTo(this.gameWidth - bracketMargin, bracketMargin);
+    brackets.lineTo(this.gameWidth - bracketMargin, bracketMargin + bracketLen);
+    // Bottom-left
+    brackets.moveTo(bracketMargin + bracketLen, this.gameHeight - bracketMargin);
+    brackets.lineTo(bracketMargin, this.gameHeight - bracketMargin);
+    brackets.lineTo(bracketMargin, this.gameHeight - bracketMargin - bracketLen);
+    // Bottom-right
+    brackets.moveTo(this.gameWidth - bracketMargin - bracketLen, this.gameHeight - bracketMargin);
+    brackets.lineTo(this.gameWidth - bracketMargin, this.gameHeight - bracketMargin);
+    brackets.lineTo(this.gameWidth - bracketMargin, this.gameHeight - bracketMargin - bracketLen);
+    brackets.strokePath();
+    root.add(brackets);
+
+    // 5. Title glow circle
+    const glowY = this.gameHeight * 0.22;
+    const glowCircle = this.add.graphics();
+    glowCircle.fillStyle(colors.primaryGlow, 0.06);
+    glowCircle.fillCircle(this.centerX, glowY, this.s(200));
+    root.add(glowCircle);
+    this.tweens.add({
+      targets: glowCircle,
+      alpha: { from: 0.5, to: 1 },
+      duration: 3000,
+      yoyo: true,
+      repeat: -1,
+      ease: anim.ease.sine,
+    });
+
+    // 6. Title text
+    const titleY = glowY - this.s(20);
+    const titleText = this.add.text(this.centerX, titleY, 'GENESIS', {
+      fontSize: font.size(100, this.scaleFactor),
       fontFamily: font.family,
       fontStyle: 'bold',
       color: colors.textPrimary,
+      letterSpacing: this.s(30),
     }).setOrigin(0.5);
+    root.add(titleText);
 
-    this.add.text(this.centerX, this.centerY, 'PUZZLE QUEST', {
-      fontSize: font.size(28, this.scaleFactor),
+    const subtitleText = this.add.text(this.centerX, titleY + this.s(90), 'PUZZLE  QUEST', {
+      fontSize: font.size(32, this.scaleFactor),
       fontFamily: font.family,
+      fontStyle: 'bold',
       color: colors.textAccent,
+      letterSpacing: this.s(18),
     }).setOrigin(0.5);
+    root.add(subtitleText);
 
-    this.add.text(this.centerX, this.centerY + this.s(80), '[ Scene pending rebuild ]', {
-      fontSize: font.size(14, this.scaleFactor),
+    // Separator under subtitle
+    const sepY = titleY + this.s(130);
+    this.createSeparator(root, this.centerX - this.s(160), sepY, this.s(320), colors.primary, 0.5);
+
+    // 7. Buttons
+    const btnY = this.gameHeight * 0.58;
+    const btnSpacing = this.s(95);
+
+    const startBtn = this.createMenuButton(
+      this.centerX, btnY,
+      'START GAME',
+      () => this.scene.start('LobbyScene'),
+      colors.primary,
+    );
+    root.add(startBtn);
+
+    const optBtn = this.createMenuButton(
+      this.centerX, btnY + btnSpacing,
+      'OPTIONS',
+      () => console.log('Options placeholder'),
+      colors.accent,
+    );
+    root.add(optBtn);
+
+    const exitBtn = this.createMenuButton(
+      this.centerX, btnY + btnSpacing * 2,
+      'EXIT',
+      () => console.log('Exit placeholder'),
+      colors.danger,
+    );
+    root.add(exitBtn);
+
+    // Staggered slide-in
+    this.animateSlideIn(startBtn, 0);
+    this.animateSlideIn(optBtn, anim.stagger * 2);
+    this.animateSlideIn(exitBtn, anim.stagger * 4);
+
+    // 8. Version badge + status dots
+    const versionY = this.gameHeight - this.s(50);
+    const dotSpacing = this.s(16);
+    const dotColors = [colors.primary, colors.textDim, colors.textDim];
+    dotColors.forEach((c, i) => {
+      const dot = this.add.circle(
+        this.centerX + (i - 1) * dotSpacing,
+        versionY - this.s(18),
+        this.s(3),
+        c, c === colors.primary ? 1 : 0.3,
+      );
+      root.add(dot);
+    });
+
+    const version = this.add.text(this.centerX, versionY, 'v0.1 ALPHA', {
+      fontSize: font.size(13, this.scaleFactor),
       fontFamily: font.family,
-      color: colors.textDim,
+      color: colors.textMuted,
+      letterSpacing: this.s(4),
     }).setOrigin(0.5);
+    root.add(version);
   }
 }
