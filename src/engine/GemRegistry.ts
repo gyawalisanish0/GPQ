@@ -41,4 +41,19 @@ export class GemRegistry {
   public getSpecialGems(): GemDefinition[] {
     return this.getAllGems().filter(g => g.type === 'special');
   }
+
+  /**
+   * Returns the hex color number for a given shape string (ShapeType value).
+   * Special gems store their creation shape in LogicCell.shape; pass that value here
+   * to get the correct tint color for rendering.
+   * 'none' (used by PARASITE, ShapeType.NONE) returns the fixed parasite purple 0x8b5cf6.
+   */
+  public getColorForShape(shape: string): number {
+    if (!shape || shape === 'none') return 0x8b5cf6;
+    const gem = this.getNormalGems().find(
+      g => g.shape?.toLowerCase() === shape.toLowerCase()
+    );
+    if (!gem?.color) return 0xffffff;
+    return parseInt(gem.color.replace('0x', ''), 16);
+  }
 }
