@@ -1,4 +1,3 @@
-# Genesis Puzzle Quest — TODO
 
 > Quick-glance checklist. Full implementation details with context are in `docs/TODO.md`.
 
